@@ -44,6 +44,65 @@ type DowntimeRecord = {
   notes: string;
 };
 
+const demoDisplayParts: DisplayPart[] = [
+  {
+    id: "part-1",
+    externalPartNumber: "921690689H",
+    description: "C1YX-2 SPLR W/CAM BAE-GE",
+    customerPartNumber: "26618535",
+    arNumber: "AR036758",
+    position: "220",
+    colour: "8",
+    fixtureId: "220",
+    lineupId: "lineup-1",
+    sequence: "10",
+    orderQty: "24",
+    packQty: "12",
+  },
+  {
+    id: "part-2",
+    externalPartNumber: "74165-TYA-A50",
+    description: "25 MDX FRT WHL PROTECTOR",
+    customerPartNumber: "74165-TYA-A50",
+    arNumber: "AR041220",
+    position: "110",
+    colour: "1",
+    fixtureId: "110",
+    lineupId: "lineup-2",
+    sequence: "20",
+    orderQty: "26",
+    packQty: "26",
+  },
+  {
+    id: "part-3",
+    externalPartNumber: "70490535",
+    description: "C1YC SPOILER UPPER TRIM",
+    customerPartNumber: "26619021",
+    arNumber: "AR039112",
+    position: "305",
+    colour: "2",
+    fixtureId: "305",
+    lineupId: "lineup-3",
+    sequence: "30",
+    orderQty: "18",
+    packQty: "18",
+  },
+  {
+    id: "part-4",
+    externalPartNumber: "26620001",
+    description: "C1XX LOWER GARNISH BLACK",
+    customerPartNumber: "26620001",
+    arNumber: "AR045500",
+    position: "410",
+    colour: "3",
+    fixtureId: "410",
+    lineupId: "lineup-4",
+    sequence: "40",
+    orderQty: "20",
+    packQty: "18",
+  },
+];
+
 function App() {
   const [screen, setScreen] = useState<AppScreen>("login");
   const [employeeId, setEmployeeId] = useState("");
@@ -139,7 +198,14 @@ function App() {
       }
     } catch (error) {
       console.error("Station data load failed:", error);
-      setDisplayParts([]);
+      setStationConfig({
+        stationId: "WP3-0031",
+        hmiCellCode: "WP3 - WP3-0031",
+        hmiTitle: "WP3 - WP3-0031",
+        version: "v 3.1.2.273",
+      });
+      setDisplayParts(demoDisplayParts);
+      setMachineMessage("Demo mode line-up loaded. Backend is not reachable.");
     } finally {
       setIsLoadingLineup(false);
     }
@@ -165,7 +231,26 @@ function App() {
       resetProductionState();
       setMachineMessage(result.message || "Login successful.");
       setScreen("partMenu");
-    } catch (error) {
+    } catch (error: unknown) {
+      const isNetworkError =
+        typeof error === "object" &&
+        error !== null &&
+        "message" in error &&
+        typeof (error as { message?: string }).message === "string" &&
+        (error as { message: string }).message.toLowerCase().includes("network");
+
+      if (isNetworkError) {
+        setEmployeeId(employeeId.trim());
+        setCrewSize(String(Number(crewSize)));
+        setShowLineupList(false);
+        setHighlightedLineupId("");
+        setSelectedLineupId("");
+        resetProductionState();
+        setMachineMessage("Demo mode login active. Backend is not reachable.");
+        setScreen("partMenu");
+        return;
+      }
+
       console.error("Login failed:", error);
       setMachineMessage("Login failed. Please check the form and try again.");
     }
@@ -319,18 +404,9 @@ function App() {
   };
 
   return (
-    <main
-      style={{
-        minHeight: "100vh",
-        background: "#262c35",
-        display: "flex",
-        justifyContent: "center",
-        alignItems: "center",
-        padding: 16,
-        boxSizing: "border-box",
-        fontFamily: "Arial, sans-serif",
-      }}
-    >
+    <main style={mainShellStyle}>
+      <style>{responsiveCss}</style>
+
       {screen === "login" && (
         <LoginScreen
           stationId={stationId}
@@ -422,7 +498,7 @@ function LoginScreen({
       </div>
 
       <div style={loginPanelStyle}>
-        <div style={loginGridStyle}>
+        <div className="login-grid" style={loginGridStyle}>
           <label style={loginLabelStyle}>STATION ID</label>
           <input value={stationId} readOnly style={inputStyle} />
 
@@ -448,7 +524,7 @@ function LoginScreen({
           </select>
         </div>
 
-        <div style={loginButtonsRowStyle}>
+        <div className="login-buttons-row" style={loginButtonsRowStyle}>
           <button style={greenLoginButtonStyle} onClick={onLogin}>
             LOG IN
           </button>
@@ -515,7 +591,7 @@ function PartMenuScreen({
               {isLoadingLineup ? (
                 <div style={emptyPanelMessageStyle}>Loading scheduler line-up...</div>
               ) : (
-                <div style={lineupContentWrapStyle}>
+                <div className="lineup-content-wrap" style={lineupContentWrapStyle}>
                   <div style={lineupListStyle}>
                     {parts.map((part) => {
                       const isHighlighted = part.lineupId === highlightedLineupId;
@@ -533,7 +609,7 @@ function PartMenuScreen({
                               : "2px solid #cbd5e1",
                           }}
                         >
-                          <div style={lineupTopRowStyle}>
+                          <div className="lineup-top-row" style={lineupTopRowStyle}>
                             <span style={lineupMainCodeStyle}>{part.externalPartNumber}</span>
                             <span style={lineupSeqStyle}>SEQ {part.sequence || "-"}</span>
                           </div>
@@ -576,7 +652,7 @@ function PartMenuScreen({
           )}
         </div>
 
-        <div style={bottomButtonsWrapStyle}>
+        <div className="partmenu-buttons-row" style={bottomButtonsWrapStyle}>
           <button style={displayButtonStyle} onClick={onDisplayPart}>
             DISPLAY PART
           </button>
@@ -633,37 +709,10 @@ function HmiScreen({
     scanStatus === "success" ? "#22c55e" : scanStatus === "error" ? "#ef4444" : "#f3f4f6";
 
   return (
-    <section
-      style={{
-        width: "100%",
-        maxWidth: 1100,
-        background: "#4a4f5f",
-        color: "#ffffff",
-        border: "2px solid #707786",
-        boxShadow: "0 10px 30px rgba(0,0,0,0.35)",
-        padding: 12,
-        boxSizing: "border-box",
-      }}
-    >
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "flex-start",
-          marginBottom: 8,
-          gap: 12,
-        }}
-      >
+    <section style={hmiSectionStyle}>
+      <div className="hmi-top-header" style={hmiTopHeaderStyle}>
         <div>
-          <div
-            style={{
-              fontSize: 40,
-              fontWeight: 700,
-              letterSpacing: 1,
-              lineHeight: 1,
-              marginBottom: 8,
-            }}
-          >
+          <div className="hmi-title" style={hmiTitleStyle}>
             {hmiCellCode}
           </div>
           <div style={{ fontSize: 12, color: "#e5e7eb", fontWeight: 700 }}>
@@ -686,18 +735,10 @@ function HmiScreen({
           EXTERNAL PART INFORMATION
         </div>
 
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "220px 1fr 130px",
-            gap: 10,
-            alignItems: "center",
-            marginBottom: 6,
-          }}
-        >
+        <div className="external-info-grid" style={externalInfoGridStyle}>
           <div style={yellowTextSmall}>{part.externalPartNumber}</div>
           <div style={yellowTextLarge}>{part.description}</div>
-          <div style={{ textAlign: "right", color: "#d1d5db", fontSize: 13 }}>
+          <div className="fixture-id-box" style={fixtureIdStyle}>
             Fixture ID: {part.fixtureId}
           </div>
         </div>
@@ -713,14 +754,7 @@ function HmiScreen({
             GENERAL INFORMATION
           </div>
 
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "1.1fr 1fr 0.8fr 0.8fr 240px",
-              gap: 12,
-              alignItems: "start",
-            }}
-          >
+          <div className="general-info-grid" style={generalInfoGridStyle}>
             <MiniInfo label="CUST PART #" value={part.customerPartNumber} />
             <MiniInfo label="AR #" value={part.arNumber} />
             <MiniInfo label="POSITION" value={part.position} />
@@ -745,22 +779,8 @@ function HmiScreen({
         </div>
       </div>
 
-      <div
-        style={{
-          marginTop: 12,
-          display: "grid",
-          gridTemplateColumns: "280px 1fr 280px",
-          gap: 10,
-        }}
-      >
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "1fr 1fr",
-            gap: 8,
-            alignContent: "start",
-          }}
-        >
+      <div className="hmi-main-grid" style={hmiMainGridStyle}>
+        <div className="hmi-actions-grid" style={hmiActionsGridStyle}>
           <button style={greenBtn}>PRINT PARTIAL</button>
           <button style={greenBtn}>SHIFT CHANGE</button>
           <button style={yellowBtn} onClick={onOpenDowntime}>
@@ -790,14 +810,7 @@ function HmiScreen({
             <CounterHeader title="PRODUCTION" />
           </div>
 
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "1fr 1fr",
-              gap: 8,
-              alignItems: "start",
-            }}
-          >
+          <div className="production-panel-grid" style={productionPanelGridStyle}>
             <div>
               <div
                 style={{
@@ -871,16 +884,7 @@ function HmiScreen({
           </div>
         </div>
 
-        <div
-          style={{
-            border: "1px solid #7f8796",
-            background: "#505566",
-            padding: 10,
-            color: "#d1d5db",
-            fontSize: 13,
-            lineHeight: 1.6,
-          }}
-        >
+        <div style={rightPanelStyle}>
           <div>STATION: {stationId}</div>
           <div>EMPLOYEE ID: {employeeId}</div>
           <div>CREW SIZE: {crewSize}</div>
@@ -892,31 +896,9 @@ function HmiScreen({
         </div>
       </div>
 
-      <div
-        style={{
-          marginTop: 10,
-          border: "1px solid #8992a3",
-          background: "#d1d5db",
-          color: "#111827",
-          fontSize: 14,
-          padding: "6px 12px",
-          fontWeight: 700,
-          textAlign: "left" as const,
-        }}
-      >
-        {machineMessage}
-      </div>
+      <div style={messageBarStyle}>{machineMessage}</div>
 
-      <div
-        style={{
-          marginTop: 4,
-          display: "grid",
-          gridTemplateColumns: "repeat(8, 1fr)",
-          gap: 4,
-          fontSize: 10,
-          color: "#d1d5db",
-        }}
-      >
+      <div className="footer-tags-grid" style={footerTagsGridStyle}>
         <FooterTag text="Season Number" />
         <FooterTag text="Shift" />
         <FooterTag text="Crew Size" />
@@ -986,13 +968,13 @@ function DowntimeScreen({
 
   return (
     <section style={downtimeWrapStyle}>
-      <div style={downtimeHeaderStyle}>
+      <div className="downtime-header" style={downtimeHeaderStyle}>
         <div style={downtimeTitleStyle}>DOWNTIME</div>
         <div style={downtimeTimerStyle}>{displayTime}</div>
       </div>
 
       <div style={downtimeBodyStyle}>
-        <div style={downtimeColumnsStyle}>
+        <div className="downtime-columns" style={downtimeColumnsStyle}>
           {Object.entries(categoryOptions).map(([category, reasons]) => (
             <div key={category} style={downtimeColumnStyle}>
               <div style={downtimeColumnHeaderStyle}>{category}</div>
@@ -1029,7 +1011,7 @@ function DowntimeScreen({
           />
         </div>
 
-        <div style={downtimeFooterActionsStyle}>
+        <div className="downtime-actions" style={downtimeFooterActionsStyle}>
           {!activeDowntime?.startedAt || activeDowntime.endedAt ? (
             <button style={downtimeBlueButtonStyle} onClick={startDowntime}>
               START
@@ -1461,6 +1443,106 @@ function formatElapsedTime(totalSeconds: number) {
   return `${hours}:${minutes}:${seconds}`;
 }
 
+const responsiveCss = `
+@media (max-width: 900px) {
+  .lineup-content-wrap {
+    grid-template-columns: 1fr !important;
+  }
+
+  .hmi-main-grid {
+    grid-template-columns: 1fr !important;
+  }
+
+  .production-panel-grid {
+    grid-template-columns: 1fr !important;
+  }
+
+  .general-info-grid {
+    grid-template-columns: 1fr 1fr !important;
+  }
+
+  .external-info-grid {
+    grid-template-columns: 1fr !important;
+  }
+
+  .fixture-id-box {
+    text-align: left !important;
+  }
+}
+
+@media (max-width: 700px) {
+  .login-grid {
+    grid-template-columns: 1fr !important;
+  }
+
+  .login-buttons-row {
+    grid-template-columns: 1fr !important;
+  }
+
+  .partmenu-buttons-row {
+    grid-template-columns: 1fr !important;
+  }
+
+  .lineup-top-row {
+    flex-direction: column;
+    align-items: flex-start !important;
+  }
+
+  .hmi-top-header {
+    flex-direction: column;
+    align-items: flex-start !important;
+  }
+
+  .hmi-title {
+    font-size: 28px !important;
+    word-break: break-word;
+  }
+
+  .downtime-header {
+    flex-direction: column;
+    align-items: flex-start !important;
+  }
+
+  .downtime-columns {
+    grid-template-columns: 1fr !important;
+  }
+
+  .downtime-actions {
+    justify-content: stretch !important;
+    flex-direction: column;
+  }
+
+  .footer-tags-grid {
+    grid-template-columns: repeat(2, 1fr) !important;
+  }
+}
+
+@media (max-width: 520px) {
+  .general-info-grid {
+    grid-template-columns: 1fr !important;
+  }
+
+  .footer-tags-grid {
+    grid-template-columns: 1fr !important;
+  }
+
+  .hmi-actions-grid {
+    grid-template-columns: 1fr !important;
+  }
+}
+`;
+
+const mainShellStyle = {
+  minHeight: "100vh",
+  background: "#262c35",
+  display: "flex",
+  justifyContent: "center",
+  alignItems: "center",
+  padding: 16,
+  boxSizing: "border-box" as const,
+  fontFamily: "Arial, sans-serif",
+};
+
 const loginCardStyle = {
   width: "100%",
   maxWidth: 620,
@@ -1828,6 +1910,20 @@ const topInfoWrap = {
   boxSizing: "border-box" as const,
 };
 
+const externalInfoGridStyle = {
+  display: "grid",
+  gridTemplateColumns: "220px 1fr 130px",
+  gap: 10,
+  alignItems: "center",
+  marginBottom: 6,
+};
+
+const fixtureIdStyle = {
+  textAlign: "right" as const,
+  color: "#d1d5db",
+  fontSize: 13,
+};
+
 const yellowTextSmall = {
   color: "#f8d34b",
   fontSize: 22,
@@ -1851,11 +1947,75 @@ const changePackBtn = {
   cursor: "pointer",
 };
 
+const generalInfoGridStyle = {
+  display: "grid",
+  gridTemplateColumns: "1.1fr 1fr 0.8fr 0.8fr 240px",
+  gap: 12,
+  alignItems: "start",
+};
+
+const hmiSectionStyle = {
+  width: "100%",
+  maxWidth: 1100,
+  background: "#4a4f5f",
+  color: "#ffffff",
+  border: "2px solid #707786",
+  boxShadow: "0 10px 30px rgba(0,0,0,0.35)",
+  padding: 12,
+  boxSizing: "border-box" as const,
+};
+
+const hmiTopHeaderStyle = {
+  display: "flex",
+  justifyContent: "space-between",
+  alignItems: "flex-start",
+  marginBottom: 8,
+  gap: 12,
+};
+
+const hmiTitleStyle = {
+  fontSize: 40,
+  fontWeight: 700,
+  letterSpacing: 1,
+  lineHeight: 1,
+  marginBottom: 8,
+};
+
+const hmiMainGridStyle = {
+  marginTop: 12,
+  display: "grid",
+  gridTemplateColumns: "280px 1fr 280px",
+  gap: 10,
+};
+
+const hmiActionsGridStyle = {
+  display: "grid",
+  gridTemplateColumns: "1fr 1fr",
+  gap: 8,
+  alignContent: "start",
+};
+
 const panelBox = {
   border: "1px solid #7f8796",
   background: "#505566",
   padding: 8,
   boxSizing: "border-box" as const,
+};
+
+const productionPanelGridStyle = {
+  display: "grid",
+  gridTemplateColumns: "1fr 1fr",
+  gap: 8,
+  alignItems: "start",
+};
+
+const rightPanelStyle = {
+  border: "1px solid #7f8796",
+  background: "#505566",
+  padding: 10,
+  color: "#d1d5db",
+  fontSize: 13,
+  lineHeight: 1.6,
 };
 
 const actionBase = {
@@ -1931,6 +2091,26 @@ const serialListBox = {
   boxSizing: "border-box" as const,
   overflowY: "auto" as const,
   textAlign: "left" as const,
+};
+
+const messageBarStyle = {
+  marginTop: 10,
+  border: "1px solid #8992a3",
+  background: "#d1d5db",
+  color: "#111827",
+  fontSize: 14,
+  padding: "6px 12px",
+  fontWeight: 700,
+  textAlign: "left" as const,
+};
+
+const footerTagsGridStyle = {
+  marginTop: 4,
+  display: "grid",
+  gridTemplateColumns: "repeat(8, 1fr)",
+  gap: 4,
+  fontSize: 10,
+  color: "#d1d5db",
 };
 
 const downtimeWrapStyle = {
