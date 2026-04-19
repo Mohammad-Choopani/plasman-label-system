@@ -1457,16 +1457,14 @@ const responsiveCss = `
     grid-template-columns: 1fr !important;
   }
 
-  .general-info-grid {
-    grid-template-columns: 1fr 1fr !important;
-  }
-
   .external-info-grid {
-    grid-template-columns: 1fr !important;
+    grid-template-columns: 180px 1fr !important;
   }
 
   .fixture-id-box {
+    grid-column: 1 / -1;
     text-align: left !important;
+    margin-top: 4px;
   }
 }
 
@@ -1475,16 +1473,17 @@ const responsiveCss = `
     grid-template-columns: 1fr !important;
   }
 
-  .login-buttons-row {
-    grid-template-columns: 1fr !important;
-  }
-
+  .login-buttons-row,
   .partmenu-buttons-row {
     grid-template-columns: 1fr !important;
   }
 
+  .lineup-content-wrap {
+    grid-template-columns: 1fr !important;
+  }
+
   .lineup-top-row {
-    flex-direction: column;
+    flex-wrap: wrap !important;
     align-items: flex-start !important;
   }
 
@@ -1494,8 +1493,21 @@ const responsiveCss = `
   }
 
   .hmi-title {
-    font-size: 28px !important;
+    font-size: 30px !important;
+    line-height: 1.05 !important;
     word-break: break-word;
+  }
+
+  .external-info-grid {
+    grid-template-columns: 1fr !important;
+  }
+
+  .general-info-grid {
+    grid-template-columns: 1fr 1fr !important;
+  }
+
+  .footer-tags-grid {
+    grid-template-columns: repeat(2, 1fr) !important;
   }
 
   .downtime-header {
@@ -1506,15 +1518,6 @@ const responsiveCss = `
   .downtime-columns {
     grid-template-columns: 1fr !important;
   }
-
-  .downtime-actions {
-    justify-content: stretch !important;
-    flex-direction: column;
-  }
-
-  .footer-tags-grid {
-    grid-template-columns: repeat(2, 1fr) !important;
-  }
 }
 
 @media (max-width: 520px) {
@@ -1522,11 +1525,11 @@ const responsiveCss = `
     grid-template-columns: 1fr !important;
   }
 
-  .footer-tags-grid {
-    grid-template-columns: 1fr !important;
+  .hmi-actions-grid {
+    grid-template-columns: 1fr 1fr !important;
   }
 
-  .hmi-actions-grid {
+  .footer-tags-grid {
     grid-template-columns: 1fr !important;
   }
 }
@@ -1912,7 +1915,7 @@ const topInfoWrap = {
 
 const externalInfoGridStyle = {
   display: "grid",
-  gridTemplateColumns: "220px 1fr 130px",
+  gridTemplateColumns: "220px minmax(0, 1fr) 130px",
   gap: 10,
   alignItems: "center",
   marginBottom: 6,
@@ -1934,6 +1937,8 @@ const yellowTextLarge = {
   color: "#f8d34b",
   fontSize: 25,
   fontWeight: 700,
+  lineHeight: 1.1,
+  wordBreak: "break-word" as const,
 };
 
 const changePackBtn = {
