@@ -508,14 +508,46 @@ export default function App() {
 }
 
 function PinchZoomStage({ children }: { children: React.ReactNode }) {
-  const [scale, setScale] = useState(1);
+  const getAutoScale = () => {
+    if (typeof window === "undefined") return 1;
+
+    const width = window.innerWidth;
+
+    if (width <= 390) return 0.64;
+    if (width <= 430) return 0.68;
+    if (width <= 520) return 0.74;
+    if (width <= 700) return 0.82;
+
+    return 1;
+  };
+
+  const [scale, setScale] = useState(getAutoScale);
   const pinchStateRef = useRef<{
     startDistance: number;
     startScale: number;
   } | null>(null);
 
+  useEffect(() => {
+    const handleResize = () => {
+      setScale((current) => {
+        if (current !== 1 && window.innerWidth > 700) {
+          return 1;
+        }
+
+        if (current === 1 && window.innerWidth <= 700) {
+          return getAutoScale();
+        }
+
+        return current;
+      });
+    };
+
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, []);
+
   const clampScale = (value: number) => {
-    return Math.min(1.15, Math.max(0.65, value));
+    return Math.min(1.15, Math.max(0.55, value));
   };
 
   const getTouchDistance = (touches: React.TouchList) => {
@@ -2998,6 +3030,7 @@ const pinchStageViewportStyle = {
   justifyContent: "center",
   alignItems: "flex-start",
   touchAction: "none" as const,
+  paddingBottom: 12,
 };
 
 const pinchStageContentStyle = {
