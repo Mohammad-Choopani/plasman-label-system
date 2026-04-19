@@ -1866,6 +1866,12 @@ textarea {
   font: inherit;
 }
   @media (max-width: 700px) {
+  .lineup-top-row {
+    flex-wrap: wrap !important;
+    align-items: flex-start !important;
+  }
+}
+  @media (max-width: 700px) {
   .partmenu-buttons-row {
     grid-template-columns: 1fr !important;
   }
@@ -1874,7 +1880,58 @@ textarea {
 @media (max-width: 900px) {
   .lineup-content-wrap {
     grid-template-columns: 1fr !important;
+    gap: 12px !important;
   }
+
+  .hmi-main-grid {
+    grid-template-columns: 1fr !important;
+  }
+
+  .production-panel-grid {
+    grid-template-columns: 1fr !important;
+  }
+
+  .external-info-grid {
+    grid-template-columns: 1fr !important;
+  }
+
+  .fixture-id-box {
+    grid-column: auto !important;
+    text-align: left !important;
+    margin-top: 4px;
+  }
+
+  .footer-tags-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+
+  .touch-modal-panel {
+    width: min(94vw, 760px) !important;
+    max-height: 88vh !important;
+    overflow-y: auto !important;
+  }
+
+  .downtime-columns-grid {
+    grid-template-columns: 1fr !important;
+    min-height: auto !important;
+  }
+
+  .downtime-column-headers {
+    display: none !important;
+  }
+
+  .downtime-bottom-bar {
+    flex-direction: column !important;
+    align-items: stretch !important;
+  }
+
+  .top-icon-bar {
+    width: 100% !important;
+    display: grid !important;
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+    gap: 8px !important;
+  }
+}
 }
 
 @media (max-width: 700px) {
@@ -2267,12 +2324,13 @@ const lineupListStyle = {
   display: "grid",
   gap: 12,
   maxHeight: "calc(100vh - 330px)",
+  minHeight: 260,
   overflowY: "auto" as const,
   overflowX: "hidden" as const,
   paddingRight: 4,
   minWidth: 0,
+  alignContent: "start" as const,
 };
-
 
 const lineupItemStyle = {
   textAlign: "left" as const,
@@ -2338,6 +2396,7 @@ const selectedPreviewBoxStyle = {
   background: "#f3f4f6",
   padding: 14,
   minWidth: 0,
+  alignSelf: "start" as const,
 };
 
 const selectedPreviewTitleStyle = {
