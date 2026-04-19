@@ -509,13 +509,31 @@ export default function App() {
 
 function PinchZoomStage({ children }: { children: React.ReactNode }) {
   const [scale, setScale] = useState(1);
+  const [isMobileViewport, setIsMobileViewport] = useState(false);
   const pinchStateRef = useRef<{
     startDistance: number;
     startScale: number;
   } | null>(null);
 
+  useEffect(() => {
+    const updateViewport = () => {
+      setIsMobileViewport(window.innerWidth <= 900);
+    };
+
+    updateViewport();
+    window.addEventListener("resize", updateViewport);
+    return () => window.removeEventListener("resize", updateViewport);
+  }, []);
+
+  useEffect(() => {
+    if (isMobileViewport) {
+      setScale(1);
+      pinchStateRef.current = null;
+    }
+  }, [isMobileViewport]);
+
   const clampScale = (value: number) => {
-    return Math.min(1.15, Math.max(0.65, value));
+    return Math.min(1.15, Math.max(0.7, value));
   };
 
   const getTouchDistance = (touches: React.TouchList) => {
@@ -531,6 +549,8 @@ function PinchZoomStage({ children }: { children: React.ReactNode }) {
   };
 
   const handleTouchStart = (event: React.TouchEvent<HTMLDivElement>) => {
+    if (isMobileViewport) return;
+
     if (event.touches.length === 2) {
       pinchStateRef.current = {
         startDistance: getTouchDistance(event.touches),
@@ -540,6 +560,7 @@ function PinchZoomStage({ children }: { children: React.ReactNode }) {
   };
 
   const handleTouchMove = (event: React.TouchEvent<HTMLDivElement>) => {
+    if (isMobileViewport) return;
     if (event.touches.length !== 2 || !pinchStateRef.current) return;
 
     event.preventDefault();
@@ -556,6 +577,8 @@ function PinchZoomStage({ children }: { children: React.ReactNode }) {
   };
 
   const handleTouchEnd = (event: React.TouchEvent<HTMLDivElement>) => {
+    if (isMobileViewport) return;
+
     if (event.touches.length < 2) {
       pinchStateRef.current = null;
     }
@@ -563,7 +586,10 @@ function PinchZoomStage({ children }: { children: React.ReactNode }) {
 
   return (
     <div
-      style={pinchStageViewportStyle}
+      style={{
+        ...pinchStageViewportStyle,
+        touchAction: isMobileViewport ? "pan-y" : "none",
+      }}
       onTouchStart={handleTouchStart}
       onTouchMove={handleTouchMove}
       onTouchEnd={handleTouchEnd}
@@ -571,7 +597,9 @@ function PinchZoomStage({ children }: { children: React.ReactNode }) {
       <div
         style={{
           ...pinchStageContentStyle,
-          transform: `scale(${scale})`,
+          transform: isMobileViewport ? "none" : `scale(${scale})`,
+          transition: isMobileViewport ? "none" : pinchStageContentStyle.transition,
+          width: "100%",
         }}
       >
         {children}
@@ -1675,6 +1703,7 @@ function PreviewRow({ label, value }: { label: string; value: string }) {
           padding: "0 10px",
           fontWeight: 700,
           border: "1px solid #cbd5e1",
+          wordBreak: "break-word",
         }}
       >
         {value}
@@ -1710,6 +1739,7 @@ function MiniInfo({
           fontSize: 24,
           fontWeight: 700,
           lineHeight: 1.05,
+          wordBreak: "break-word",
         }}
       >
         {value}
@@ -1825,13 +1855,41 @@ function formatElapsedTime(totalSeconds: number) {
 }
 
 const responsiveCss = `
+* {
+  box-sizing: border-box;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+  @media (max-width: 700px) {
+  .partmenu-buttons-row {
+    grid-template-columns: 1fr !important;
+  }
+}
+
+@media (max-width: 900px) {
+  .lineup-content-wrap {
+    grid-template-columns: 1fr !important;
+  }
+}
+
+@media (max-width: 700px) {
+  .top-icon-bar {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+}
+
 @media (max-width: 1100px) {
   .hmi-main-grid {
     grid-template-columns: 250px minmax(0, 1fr) 220px !important;
   }
 
   .footer-tags-grid {
-    grid-template-columns: repeat(4, 1fr) !important;
+    grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
   }
 }
 
@@ -1859,25 +1917,28 @@ const responsiveCss = `
   }
 
   .external-info-grid {
-    grid-template-columns: 180px 1fr !important;
+    grid-template-columns: 1fr !important;
   }
 
   .fixture-id-box {
-    grid-column: 1 / -1;
+    grid-column: auto !important;
     text-align: left !important;
     margin-top: 4px;
   }
 
   .footer-tags-grid {
-    grid-template-columns: repeat(3, 1fr) !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
   }
 
   .touch-modal-panel {
-    width: min(92vw, 760px) !important;
+    width: min(94vw, 760px) !important;
+    max-height: 88vh !important;
+    overflow-y: auto !important;
   }
 
   .downtime-columns-grid {
     grid-template-columns: 1fr !important;
+    min-height: auto !important;
   }
 
   .downtime-column-headers {
@@ -1887,6 +1948,13 @@ const responsiveCss = `
   .downtime-bottom-bar {
     flex-direction: column !important;
     align-items: stretch !important;
+  }
+
+  .top-icon-bar {
+    width: 100% !important;
+    display: grid !important;
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+    gap: 8px !important;
   }
 }
 
@@ -1910,32 +1978,30 @@ const responsiveCss = `
   }
 
   .hmi-top-header {
-    flex-direction: column;
-    align-items: flex-start !important;
+    flex-direction: column !important;
+    align-items: stretch !important;
   }
 
   .hmi-title {
-    font-size: 30px !important;
-    line-height: 1.05 !important;
-    word-break: break-word;
-  }
-
-  .external-info-grid {
-    grid-template-columns: 1fr !important;
+    font-size: 24px !important;
+    line-height: 1.08 !important;
+    word-break: break-word !important;
   }
 
   .general-info-grid {
+    grid-template-columns: 1fr !important;
+  }
+
+  .hmi-actions-grid {
     grid-template-columns: 1fr 1fr !important;
   }
 
   .footer-tags-grid {
-    grid-template-columns: repeat(2, 1fr) !important;
+    grid-template-columns: 1fr !important;
   }
 
   .top-icon-bar {
-    width: 100%;
-    display: grid !important;
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
   }
 }
 
@@ -1953,15 +2019,20 @@ const responsiveCss = `
   }
 
   .top-icon-bar {
-    grid-template-columns: repeat(2, 1fr);
+    grid-template-columns: 1fr 1fr !important;
   }
 
   .touch-modal-panel {
-    width: min(94vw, 760px) !important;
-    padding: 16px !important;
+    width: 94vw !important;
+    padding: 14px !important;
+  }
+
+  .hmi-title {
+    font-size: 20px !important;
   }
 }
 `;
+
 
 const mainShellStyle = {
   width: "100%",
@@ -1972,6 +2043,7 @@ const mainShellStyle = {
   padding: "10px 12px 18px",
   boxSizing: "border-box" as const,
   fontFamily: "Arial, sans-serif",
+  overflowX: "hidden" as const,
   overflowY: "auto" as const,
 };
 
@@ -2032,6 +2104,8 @@ const inputStyle = {
   fontSize: 18,
   outline: "none",
   boxSizing: "border-box" as const,
+  width: "100%",
+  minWidth: 0,
 };
 
 const loginButtonsRowStyle = {
@@ -2093,6 +2167,7 @@ const whiteMenuBoxStyle = {
   padding: 18,
   boxSizing: "border-box" as const,
   minHeight: "calc(100vh - 72px)",
+  overflow: "hidden" as const,
 };
 
 const whiteMenuTitleStyle = {
@@ -2183,8 +2258,9 @@ const lineupHintStyle = {
 
 const lineupContentWrapStyle = {
   display: "grid",
-  gridTemplateColumns: "minmax(0, 1fr) 380px",
+  gridTemplateColumns: "minmax(0, 1fr) minmax(0, 360px)",
   gap: 16,
+  alignItems: "start",
 };
 
 const lineupListStyle = {
@@ -2192,16 +2268,20 @@ const lineupListStyle = {
   gap: 12,
   maxHeight: "calc(100vh - 330px)",
   overflowY: "auto" as const,
+  overflowX: "hidden" as const,
   paddingRight: 4,
+  minWidth: 0,
 };
+
 
 const lineupItemStyle = {
   textAlign: "left" as const,
   padding: 16,
   cursor: "pointer",
   minHeight: 106,
+  width: "100%",
+  boxSizing: "border-box" as const,
 };
-
 const lineupTopRowStyle = {
   display: "flex",
   justifyContent: "space-between",
@@ -2212,6 +2292,7 @@ const lineupTopRowStyle = {
 const lineupMainCodeStyle = {
   fontWeight: 700,
   fontSize: 18,
+  wordBreak: "break-word" as const,
 };
 
 const lineupSeqStyle = {
@@ -2225,6 +2306,7 @@ const lineupDescriptionStyle = {
   marginTop: 6,
   marginBottom: 10,
   lineHeight: 1.35,
+  wordBreak: "break-word" as const,
 };
 
 const lineupMetaGridStyle = {
@@ -2255,6 +2337,7 @@ const selectedPreviewBoxStyle = {
   border: "2px solid #cbd5e1",
   background: "#f3f4f6",
   padding: 14,
+  minWidth: 0,
 };
 
 const selectedPreviewTitleStyle = {
@@ -2365,6 +2448,7 @@ const yellowTextSmall = {
   color: "#f8d34b",
   fontSize: 22,
   fontWeight: 700,
+  wordBreak: "break-word" as const,
 };
 
 const yellowTextLarge = {
@@ -2403,6 +2487,7 @@ const hmiSectionStyle = {
   padding: 10,
   boxSizing: "border-box" as const,
   position: "relative" as const,
+  overflow: "hidden" as const,
 };
 
 const hmiTopHeaderStyle = {
@@ -2602,6 +2687,7 @@ const messageBarStyle = {
   padding: "8px 12px",
   fontWeight: 700,
   textAlign: "left" as const,
+  wordBreak: "break-word" as const,
 };
 
 const footerTagsGridStyle = {
@@ -2764,11 +2850,13 @@ const reportPartStyle = {
   fontSize: 18,
   fontWeight: 700,
   marginBottom: 4,
+  wordBreak: "break-word" as const,
 };
 
 const reportDescStyle = {
   fontSize: 14,
   lineHeight: 1.35,
+  wordBreak: "break-word" as const,
 };
 
 const downtimeScreenShellStyle = {
@@ -2784,7 +2872,7 @@ const downtimeScaleSpacerStyle = {
 
 const downtimeFrameStyle = {
   width: "100%",
-  minHeight: "calc(100vh - 36px)",
+  minHeight: "auto",
   background: "#d8deea",
   border: "2px solid #7b8799",
   boxSizing: "border-box" as const,
@@ -2800,6 +2888,7 @@ const downtimeYellowHeaderStyle = {
   padding: "0 18px",
   gap: 12,
   boxSizing: "border-box" as const,
+  flexWrap: "wrap" as const,
 };
 
 const downtimeHeaderTitleStyle = {
@@ -2859,7 +2948,7 @@ const downtimeColumnsGridStyle = {
   display: "grid",
   gridTemplateColumns: "1fr 1fr 1fr",
   gap: 0,
-  minHeight: "calc(100vh - 330px)",
+  minHeight: "auto",
 };
 
 const downtimeListColumnStyle = {
@@ -2997,7 +3086,6 @@ const pinchStageViewportStyle = {
   display: "flex",
   justifyContent: "center",
   alignItems: "flex-start",
-  touchAction: "none" as const,
 };
 
 const pinchStageContentStyle = {
