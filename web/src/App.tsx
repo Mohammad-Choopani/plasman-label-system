@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { getStationConfig, getStationLineup, loginOperator } from "./api/client";
 
 type AppScreen = "login" | "partMenu" | "hmi" | "downtime";
@@ -468,38 +468,115 @@ export default function App() {
       )}
 
       {screen === "hmi" && selectedPart && (
-        <HmiScreen
-          hmiCellCode={hmiCellCode}
-          hmiVersion={hmiVersion}
-          stationId={stationId}
-          employeeId={employeeId}
-          crewSize={crewSize}
-          part={selectedPart}
-          lineupParts={displayParts}
-          machineMessage={machineMessage}
-          goodCount={goodCount}
-          suspectCount={suspectCount}
-          packedFgCount={packedFgCount}
-          containerCount={containerCount}
-          packedSerials={packedSerials}
-          scanStatus={scanStatus}
-          onScanOk={handleSimulateValidScan}
-          onChangePart={handleChangePart}
-          onLogout={handleLogout}
-          onOpenDowntime={handleOpenDowntime}
-          onSetMachineMessage={setMachineMessage}
-        />
+        <PinchZoomStage>
+          <HmiScreen
+            hmiCellCode={hmiCellCode}
+            hmiVersion={hmiVersion}
+            stationId={stationId}
+            employeeId={employeeId}
+            crewSize={crewSize}
+            part={selectedPart}
+            lineupParts={displayParts}
+            machineMessage={machineMessage}
+            goodCount={goodCount}
+            suspectCount={suspectCount}
+            packedFgCount={packedFgCount}
+            containerCount={containerCount}
+            packedSerials={packedSerials}
+            scanStatus={scanStatus}
+            onScanOk={handleSimulateValidScan}
+            onChangePart={handleChangePart}
+            onLogout={handleLogout}
+            onOpenDowntime={handleOpenDowntime}
+            onSetMachineMessage={setMachineMessage}
+          />
+        </PinchZoomStage>
       )}
 
       {screen === "downtime" && (
-        <DowntimeScreen
-          hmiCellCode={hmiCellCode}
-          activeDowntime={activeDowntime}
-          onStartDowntime={handleStartDowntime}
-          onResume={handleResumeFromDowntime}
-        />
+        <PinchZoomStage>
+          <DowntimeScreen
+            hmiCellCode={hmiCellCode}
+            activeDowntime={activeDowntime}
+            onStartDowntime={handleStartDowntime}
+            onResume={handleResumeFromDowntime}
+          />
+        </PinchZoomStage>
       )}
     </main>
+  );
+}
+
+function PinchZoomStage({ children }: { children: React.ReactNode }) {
+  const [scale, setScale] = useState(1);
+  const pinchStateRef = useRef<{
+    startDistance: number;
+    startScale: number;
+  } | null>(null);
+
+  const clampScale = (value: number) => {
+    return Math.min(1.15, Math.max(0.65, value));
+  };
+
+  const getTouchDistance = (touches: React.TouchList) => {
+    if (touches.length < 2) return 0;
+
+    const first = touches[0];
+    const second = touches[1];
+
+    const dx = second.clientX - first.clientX;
+    const dy = second.clientY - first.clientY;
+
+    return Math.sqrt(dx * dx + dy * dy);
+  };
+
+  const handleTouchStart = (event: React.TouchEvent<HTMLDivElement>) => {
+    if (event.touches.length === 2) {
+      pinchStateRef.current = {
+        startDistance: getTouchDistance(event.touches),
+        startScale: scale,
+      };
+    }
+  };
+
+  const handleTouchMove = (event: React.TouchEvent<HTMLDivElement>) => {
+    if (event.touches.length !== 2 || !pinchStateRef.current) return;
+
+    event.preventDefault();
+
+    const currentDistance = getTouchDistance(event.touches);
+
+    if (currentDistance <= 0) return;
+
+    const nextScale =
+      pinchStateRef.current.startScale *
+      (currentDistance / pinchStateRef.current.startDistance);
+
+    setScale(clampScale(nextScale));
+  };
+
+  const handleTouchEnd = (event: React.TouchEvent<HTMLDivElement>) => {
+    if (event.touches.length < 2) {
+      pinchStateRef.current = null;
+    }
+  };
+
+  return (
+    <div
+      style={pinchStageViewportStyle}
+      onTouchStart={handleTouchStart}
+      onTouchMove={handleTouchMove}
+      onTouchEnd={handleTouchEnd}
+    >
+      <div
+        style={{
+          ...pinchStageContentStyle,
+          transform: `scale(${scale})`,
+        }}
+      >
+        {children}
+      </div>
+    </div>
   );
 }
 
@@ -1173,7 +1250,12 @@ function DowntimeScreen({
   };
 
   useEffect(() => {
-    if (!activeDowntime?.startedAt || activeDowntime.endedAt) return;
+    if (!activeDowntime?.startedAt || activeDowntime.endedAt) {
+      setElapsedSeconds(0);
+      return;
+    }
+
+    setElapsedSeconds(Math.floor((Date.now() - activeDowntime.startedAt) / 1000));
 
     const timer = window.setInterval(() => {
       setElapsedSeconds(Math.floor((Date.now() - activeDowntime.startedAt) / 1000));
@@ -1191,82 +1273,84 @@ function DowntimeScreen({
 
   return (
     <section style={downtimeScreenShellStyle}>
-      <div style={downtimeFrameStyle}>
-        <div style={downtimeYellowHeaderStyle}>
-          <div style={downtimeHeaderTitleStyle}>DOWNTIME</div>
-          <div style={downtimeClockWrapStyle}>
-            <div style={downtimeClockValueStyle}>{displayTime}</div>
-            <div style={downtimeClockMetaStyle}>SECONDS ELAPSED</div>
-          </div>
-        </div>
-
-        <div style={downtimeInnerBodyStyle}>
-          <div style={downtimeColumnHeadersStyle}>
-            <div style={downtimeColumnHeaderCellStyle}>MAINTENANCE</div>
-            <div style={downtimeColumnHeaderCellStyle}>DOWNTIME</div>
-            <div style={downtimeColumnHeaderCellStyle}>PROCESS</div>
+      <div style={downtimeScaleSpacerStyle}>
+        <div style={downtimeFrameStyle}>
+          <div style={downtimeYellowHeaderStyle}>
+            <div style={downtimeHeaderTitleStyle}>DOWNTIME</div>
+            <div style={downtimeClockWrapStyle}>
+              <div style={downtimeClockValueStyle}>{displayTime}</div>
+              <div style={downtimeClockMetaStyle}>SECONDS ELAPSED</div>
+            </div>
           </div>
 
-          <div className="downtime-columns-grid" style={downtimeColumnsGridStyle}>
-            {Object.entries(categoryOptions).map(([category, reasons]) => (
-              <div key={category} style={downtimeListColumnStyle}>
-                {reasons.map((reason) => {
-                  const isSelected = selectedCategory === category && selectedReason === reason;
+          <div style={downtimeInnerBodyStyle}>
+            <div className="downtime-column-headers" style={downtimeColumnHeadersStyle}>
+              <div style={downtimeColumnHeaderCellStyle}>MAINTENANCE</div>
+              <div style={downtimeColumnHeaderCellStyle}>DOWNTIME</div>
+              <div style={downtimeColumnHeaderCellStyle}>PROCESS</div>
+            </div>
 
-                  return (
-                    <button
-                      key={reason}
-                      onClick={() => {
-                        setSelectedCategory(category);
-                        setSelectedReason(reason);
-                      }}
-                      style={{
-                        ...downtimeListButtonStyle,
-                        background: isSelected ? "#2f66da" : "#ffffff",
-                        color: isSelected ? "#ffffff" : "#1f2937",
-                      }}
-                    >
-                      {reason}
-                    </button>
-                  );
-                })}
+            <div className="downtime-columns-grid" style={downtimeColumnsGridStyle}>
+              {Object.entries(categoryOptions).map(([category, reasons]) => (
+                <div key={category} style={downtimeListColumnStyle}>
+                  {reasons.map((reason) => {
+                    const isSelected = selectedCategory === category && selectedReason === reason;
+
+                    return (
+                      <button
+                        key={reason}
+                        onClick={() => {
+                          setSelectedCategory(category);
+                          setSelectedReason(reason);
+                        }}
+                        style={{
+                          ...downtimeListButtonStyle,
+                          background: isSelected ? "#2f66da" : "#ffffff",
+                          color: isSelected ? "#ffffff" : "#1f2937",
+                        }}
+                      >
+                        {reason}
+                      </button>
+                    );
+                  })}
+                </div>
+              ))}
+            </div>
+
+            <div style={downtimeExplanationWrapStyle}>
+              <div style={downtimeExplanationTitleStyle}>EXPLANATION / DETAILS</div>
+              <textarea
+                value={notes}
+                onChange={(e) => setNotes(e.target.value)}
+                style={downtimeExplanationInputStyle}
+              />
+            </div>
+
+            <div className="downtime-bottom-bar" style={downtimeBottomBarStyle}>
+              <div style={downtimeIconsWrapStyle}>
+                <DowntimeToolIcon emoji="🛠️" label="Maint" />
+                <DowntimeToolIcon emoji="🚚" label="Supply" />
+                <DowntimeToolIcon emoji="✅" label="Quality" />
+                <DowntimeToolIcon emoji="👥" label="Team" />
               </div>
-            ))}
-          </div>
 
-          <div style={downtimeExplanationWrapStyle}>
-            <div style={downtimeExplanationTitleStyle}>EXPLANATION / DETAILS</div>
-            <textarea
-              value={notes}
-              onChange={(e) => setNotes(e.target.value)}
-              style={downtimeExplanationInputStyle}
-            />
-          </div>
+              <div style={downtimeActionButtonsWrapStyle}>
+                <button style={downtimeBlueActionStyle}>OPTIONS</button>
 
-          <div style={downtimeBottomBarStyle}>
-            <div style={downtimeIconsWrapStyle}>
-              <DowntimeToolIcon emoji="🛠️" label="Maint" />
-              <DowntimeToolIcon emoji="🚚" label="Supply" />
-              <DowntimeToolIcon emoji="✅" label="Quality" />
-              <DowntimeToolIcon emoji="👥" label="Team" />
+                {!activeDowntime?.startedAt || activeDowntime.endedAt ? (
+                  <button style={downtimeStartActionStyle} onClick={startDowntime}>
+                    START
+                  </button>
+                ) : (
+                  <button style={downtimeResumeActionStyle} onClick={onResume}>
+                    RESUME
+                  </button>
+                )}
+              </div>
             </div>
 
-            <div style={downtimeActionButtonsWrapStyle}>
-              <button style={downtimeBlueActionStyle}>OPTIONS</button>
-
-              {!activeDowntime?.startedAt || activeDowntime.endedAt ? (
-                <button style={downtimeStartActionStyle} onClick={startDowntime}>
-                  START
-                </button>
-              ) : (
-                <button style={downtimeResumeActionStyle} onClick={onResume}>
-                  RESUME
-                </button>
-              )}
-            </div>
+            <div style={downtimeFooterMetaStyle}>{hmiCellCode}</div>
           </div>
-
-          <div style={downtimeFooterMetaStyle}>{hmiCellCode}</div>
         </div>
       </div>
     </section>
@@ -1880,11 +1964,12 @@ const responsiveCss = `
 `;
 
 const mainShellStyle = {
+  width: "100%",
   minHeight: "100vh",
   background: "#262c35",
   display: "flex",
   justifyContent: "center",
-  padding: "10px 16px 18px",
+  padding: "10px 12px 18px",
   boxSizing: "border-box" as const,
   fontFamily: "Arial, sans-serif",
   overflowY: "auto" as const,
@@ -1988,7 +2073,7 @@ const grayLoginButtonStyle = {
 
 const menuPageWrapStyle = {
   width: "100%",
-  maxWidth: 1120,
+  maxWidth: 1400,
 };
 
 const menuTopMetaStyle = {
@@ -2001,12 +2086,13 @@ const menuTopMetaStyle = {
 };
 
 const whiteMenuBoxStyle = {
+  width: "100%",
   background: "#ffffff",
   color: "#111827",
   border: "2px solid #d1d5db",
   padding: 18,
   boxSizing: "border-box" as const,
-  minHeight: 680,
+  minHeight: "calc(100vh - 72px)",
 };
 
 const whiteMenuTitleStyle = {
@@ -2018,13 +2104,13 @@ const whiteMenuTitleStyle = {
 const largeWhitePanelStyle = {
   border: "2px solid #d1d5db",
   background: "#ffffff",
-  minHeight: 540,
+  minHeight: "calc(100vh - 210px)",
   padding: 16,
   boxSizing: "border-box" as const,
 };
 
 const emptyPanelMessageStyle = {
-  minHeight: 500,
+  minHeight: "calc(100vh - 270px)",
   display: "flex",
   alignItems: "center",
   justifyContent: "center",
@@ -2097,14 +2183,14 @@ const lineupHintStyle = {
 
 const lineupContentWrapStyle = {
   display: "grid",
-  gridTemplateColumns: "1fr 360px",
+  gridTemplateColumns: "minmax(0, 1fr) 380px",
   gap: 16,
 };
 
 const lineupListStyle = {
   display: "grid",
   gap: 12,
-  maxHeight: 430,
+  maxHeight: "calc(100vh - 330px)",
   overflowY: "auto" as const,
   paddingRight: 4,
 };
@@ -2687,11 +2773,18 @@ const reportDescStyle = {
 
 const downtimeScreenShellStyle = {
   width: "100%",
-  maxWidth: 1100,
+  maxWidth: 1400,
+};
+
+const downtimeScaleSpacerStyle = {
+  width: "100%",
+  transform: "scale(1)",
+  transformOrigin: "top center",
 };
 
 const downtimeFrameStyle = {
   width: "100%",
+  minHeight: "calc(100vh - 36px)",
   background: "#d8deea",
   border: "2px solid #7b8799",
   boxSizing: "border-box" as const,
@@ -2700,7 +2793,7 @@ const downtimeFrameStyle = {
 
 const downtimeYellowHeaderStyle = {
   background: "#f1ea45",
-  minHeight: 92,
+  minHeight: 100,
   display: "flex",
   alignItems: "center",
   justifyContent: "space-between",
@@ -2710,14 +2803,14 @@ const downtimeYellowHeaderStyle = {
 };
 
 const downtimeHeaderTitleStyle = {
-  fontSize: 30,
+  fontSize: 34,
   fontWeight: 500,
   color: "#1f2937",
   letterSpacing: 0.4,
 };
 
 const downtimeClockWrapStyle = {
-  minWidth: 240,
+  minWidth: 280,
   background: "rgba(255,255,255,0.18)",
   border: "1px solid rgba(0,0,0,0.1)",
   padding: "8px 12px",
@@ -2725,7 +2818,7 @@ const downtimeClockWrapStyle = {
 };
 
 const downtimeClockValueStyle = {
-  fontSize: 44,
+  fontSize: 52,
   lineHeight: 1,
   color: "#1f2937",
   fontWeight: 500,
@@ -2755,9 +2848,9 @@ const downtimeColumnHeaderCellStyle = {
   background: "#d8deea",
   color: "#3f4b5f",
   textAlign: "center" as const,
-  fontSize: 18,
+  fontSize: 24,
   fontWeight: 700,
-  padding: "6px 8px",
+  padding: "10px 8px",
   borderLeft: "1px solid #b7c0d0",
   borderRight: "1px solid #b7c0d0",
 };
@@ -2766,7 +2859,7 @@ const downtimeColumnsGridStyle = {
   display: "grid",
   gridTemplateColumns: "1fr 1fr 1fr",
   gap: 0,
-  minHeight: 320,
+  minHeight: "calc(100vh - 330px)",
 };
 
 const downtimeListColumnStyle = {
@@ -2774,17 +2867,17 @@ const downtimeListColumnStyle = {
   border: "1px solid #b7c0d0",
   display: "flex",
   flexDirection: "column" as const,
-  padding: 6,
+  padding: 8,
 };
 
 const downtimeListButtonStyle = {
   border: "none",
   background: "#ffffff",
   color: "#1f2937",
-  fontSize: 16,
+  fontSize: 18,
   lineHeight: 1.2,
   textAlign: "left" as const,
-  padding: "5px 6px",
+  padding: "6px 8px",
   cursor: "pointer",
 };
 
@@ -2793,15 +2886,16 @@ const downtimeExplanationWrapStyle = {
 };
 
 const downtimeExplanationTitleStyle = {
-  fontSize: 18,
+  fontSize: 24,
   color: "#3f4b5f",
   fontWeight: 700,
   marginBottom: 6,
+  textAlign: "center" as const,
 };
 
 const downtimeExplanationInputStyle = {
   width: "100%",
-  minHeight: 72,
+  minHeight: 74,
   background: "#ffffff",
   border: "1px solid #b7c0d0",
   resize: "none" as const,
@@ -2816,7 +2910,7 @@ const downtimeBottomBarStyle = {
   display: "flex",
   justifyContent: "space-between",
   alignItems: "end",
-  gap: 16,
+  gap: 12,
 };
 
 const downtimeIconsWrapStyle = {
@@ -2838,7 +2932,7 @@ const downtimeToolIconButtonStyle = {
 };
 
 const downtimeToolIconEmojiStyle = {
-  fontSize: 24,
+  fontSize: 26,
   lineHeight: 1,
 };
 
@@ -2857,8 +2951,8 @@ const downtimeActionButtonsWrapStyle = {
 };
 
 const downtimeBlueActionStyle = {
-  minWidth: 180,
-  height: 72,
+  minWidth: 190,
+  height: 68,
   border: "none",
   background: "#2347f4",
   color: "#ffffff",
@@ -2868,8 +2962,8 @@ const downtimeBlueActionStyle = {
 };
 
 const downtimeStartActionStyle = {
-  minWidth: 180,
-  height: 72,
+  minWidth: 190,
+  height: 68,
   border: "none",
   background: "#16a34a",
   color: "#ffffff",
@@ -2879,8 +2973,8 @@ const downtimeStartActionStyle = {
 };
 
 const downtimeResumeActionStyle = {
-  minWidth: 180,
-  height: 72,
+  minWidth: 190,
+  height: 68,
   border: "none",
   background: "#58b748",
   color: "#ffffff",
@@ -2893,6 +2987,23 @@ const downtimeFooterMetaStyle = {
   marginTop: 10,
   textAlign: "right" as const,
   color: "#475569",
-  fontSize: 12,
+  fontSize: 14,
   fontWeight: 700,
+};
+
+const pinchStageViewportStyle = {
+  width: "100%",
+  overflow: "auto" as const,
+  display: "flex",
+  justifyContent: "center",
+  alignItems: "flex-start",
+  touchAction: "none" as const,
+};
+
+const pinchStageContentStyle = {
+  width: "100%",
+  maxWidth: "1400px",
+  transformOrigin: "top center",
+  transition: "transform 0.04s linear",
+  willChange: "transform",
 };
