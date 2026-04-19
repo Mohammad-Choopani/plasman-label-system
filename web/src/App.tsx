@@ -1139,29 +1139,36 @@ function DowntimeScreen({
   onStartDowntime: (category: string, reason: string, notes: string) => void;
   onResume: () => void;
 }) {
-  const [selectedCategory, setSelectedCategory] = useState("MAINTENANCE");
-  const [selectedReason, setSelectedReason] = useState("");
+  const [selectedCategory, setSelectedCategory] = useState("DOWNTIME");
+  const [selectedReason, setSelectedReason] = useState("BREAK / LUNCH");
   const [notes, setNotes] = useState("");
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
 
   const categoryOptions: Record<string, string[]> = {
     MAINTENANCE: [
+      "MAINTENANCE",
       "COLOR / FAIL GOOD PART",
       "VALIDATION NOT PASSING",
       "ROBOT ISSUE",
       "SENSOR ISSUE",
       "VISION SYSTEM ISSUE",
+      "ION / FEEDER ISSUE",
+      "TORQUE GUN ISSUE",
       "WELDER ISSUE",
     ],
     DOWNTIME: ["BREAK / LUNCH", "TRAINING", "MEETING", "SAFETY ISSUE"],
     PROCESS: [
-      "RUNNING SLOW",
+      "RUNNING SLOW - BU PACK",
+      "WAITING - SUP",
       "WAITING COMPONENTS",
-      "WAITING PARTS",
+      "WAITING PKG WIP",
+      "WAITING PARTS WIP",
       "WAITING FOR QUALITY",
       "PART CHANGEOVER",
+      "DNR - PARTS NOT IN SCHED.",
       "PART QUALITY ISSUE",
       "LABEL SYS PROBLEMS",
+      "COLOR - FAIL BAD PART",
     ],
   };
 
@@ -1183,67 +1190,95 @@ function DowntimeScreen({
   const displayTime = formatElapsedTime(elapsedSeconds);
 
   return (
-    <section style={downtimeWrapStyle}>
-      <div className="downtime-header" style={downtimeHeaderStyle}>
-        <div style={downtimeTitleStyle}>DOWNTIME</div>
-        <div style={downtimeTimerStyle}>{displayTime}</div>
-      </div>
+    <section style={downtimeScreenShellStyle}>
+      <div style={downtimeFrameStyle}>
+        <div style={downtimeYellowHeaderStyle}>
+          <div style={downtimeHeaderTitleStyle}>DOWNTIME</div>
+          <div style={downtimeClockWrapStyle}>
+            <div style={downtimeClockValueStyle}>{displayTime}</div>
+            <div style={downtimeClockMetaStyle}>SECONDS ELAPSED</div>
+          </div>
+        </div>
 
-      <div style={downtimeBodyStyle}>
-        <div className="downtime-columns" style={downtimeColumnsStyle}>
-          {Object.entries(categoryOptions).map(([category, reasons]) => (
-            <div key={category} style={downtimeColumnStyle}>
-              <div style={downtimeColumnHeaderStyle}>{category}</div>
-              {reasons.map((reason) => {
-                const isSelected = selectedCategory === category && selectedReason === reason;
+        <div style={downtimeInnerBodyStyle}>
+          <div style={downtimeColumnHeadersStyle}>
+            <div style={downtimeColumnHeaderCellStyle}>MAINTENANCE</div>
+            <div style={downtimeColumnHeaderCellStyle}>DOWNTIME</div>
+            <div style={downtimeColumnHeaderCellStyle}>PROCESS</div>
+          </div>
 
-                return (
-                  <button
-                    key={reason}
-                    onClick={() => {
-                      setSelectedCategory(category);
-                      setSelectedReason(reason);
-                    }}
-                    style={{
-                      ...downtimeReasonButtonStyle,
-                      background: isSelected ? "#2563eb" : "#ffffff",
-                      color: isSelected ? "#ffffff" : "#111827",
-                    }}
-                  >
-                    {reason}
-                  </button>
-                );
-              })}
+          <div className="downtime-columns-grid" style={downtimeColumnsGridStyle}>
+            {Object.entries(categoryOptions).map(([category, reasons]) => (
+              <div key={category} style={downtimeListColumnStyle}>
+                {reasons.map((reason) => {
+                  const isSelected = selectedCategory === category && selectedReason === reason;
+
+                  return (
+                    <button
+                      key={reason}
+                      onClick={() => {
+                        setSelectedCategory(category);
+                        setSelectedReason(reason);
+                      }}
+                      style={{
+                        ...downtimeListButtonStyle,
+                        background: isSelected ? "#2f66da" : "#ffffff",
+                        color: isSelected ? "#ffffff" : "#1f2937",
+                      }}
+                    >
+                      {reason}
+                    </button>
+                  );
+                })}
+              </div>
+            ))}
+          </div>
+
+          <div style={downtimeExplanationWrapStyle}>
+            <div style={downtimeExplanationTitleStyle}>EXPLANATION / DETAILS</div>
+            <textarea
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              style={downtimeExplanationInputStyle}
+            />
+          </div>
+
+          <div style={downtimeBottomBarStyle}>
+            <div style={downtimeIconsWrapStyle}>
+              <DowntimeToolIcon emoji="🛠️" label="Maint" />
+              <DowntimeToolIcon emoji="🚚" label="Supply" />
+              <DowntimeToolIcon emoji="✅" label="Quality" />
+              <DowntimeToolIcon emoji="👥" label="Team" />
             </div>
-          ))}
+
+            <div style={downtimeActionButtonsWrapStyle}>
+              <button style={downtimeBlueActionStyle}>OPTIONS</button>
+
+              {!activeDowntime?.startedAt || activeDowntime.endedAt ? (
+                <button style={downtimeStartActionStyle} onClick={startDowntime}>
+                  START
+                </button>
+              ) : (
+                <button style={downtimeResumeActionStyle} onClick={onResume}>
+                  RESUME
+                </button>
+              )}
+            </div>
+          </div>
+
+          <div style={downtimeFooterMetaStyle}>{hmiCellCode}</div>
         </div>
-
-        <div style={downtimeNotesWrapStyle}>
-          <div style={downtimeNotesTitleStyle}>EXPLANATION / DETAILS</div>
-          <textarea
-            value={notes}
-            onChange={(e) => setNotes(e.target.value)}
-            style={downtimeTextareaStyle}
-          />
-        </div>
-
-        <div className="downtime-actions" style={downtimeFooterActionsStyle}>
-          {!activeDowntime?.startedAt || activeDowntime.endedAt ? (
-            <button style={downtimeBlueButtonStyle} onClick={startDowntime}>
-              START
-            </button>
-          ) : (
-            <button style={downtimeBlueButtonStyle}>OPTIONS</button>
-          )}
-
-          <button style={downtimeGreenButtonStyle} onClick={onResume}>
-            RESUME
-          </button>
-        </div>
-
-        <div style={downtimeMetaStyle}>{hmiCellCode}</div>
       </div>
     </section>
+  );
+}
+
+function DowntimeToolIcon({ emoji, label }: { emoji: string; label: string }) {
+  return (
+    <button type="button" style={downtimeToolIconButtonStyle}>
+      <div style={downtimeToolIconEmojiStyle}>{emoji}</div>
+      <div style={downtimeToolIconLabelStyle}>{label}</div>
+    </button>
   );
 }
 
@@ -1659,20 +1694,14 @@ function getShiftInfo(date: Date): ShiftInfo {
   const hour = date.getHours();
 
   if (hour >= 22 || hour < 6) {
-    return {
-      displayText: "Shift 1 - Midnight",
-    };
+    return { displayText: "Shift 1 - Midnight" };
   }
 
   if (hour >= 6 && hour < 14) {
-    return {
-      displayText: "Shift 2 - Morning",
-    };
+    return { displayText: "Shift 2 - Morning" };
   }
 
-  return {
-    displayText: "Shift 3 - Afternoon",
-  };
+  return { displayText: "Shift 3 - Afternoon" };
 }
 
 function getActionLabel(kind: ActionRequestKind): string {
@@ -1762,6 +1791,19 @@ const responsiveCss = `
   .touch-modal-panel {
     width: min(92vw, 760px) !important;
   }
+
+  .downtime-columns-grid {
+    grid-template-columns: 1fr !important;
+  }
+
+  .downtime-column-headers {
+    display: none !important;
+  }
+
+  .downtime-bottom-bar {
+    flex-direction: column !important;
+    align-items: stretch !important;
+  }
 }
 
 @media (max-width: 700px) {
@@ -1804,15 +1846,6 @@ const responsiveCss = `
 
   .footer-tags-grid {
     grid-template-columns: repeat(2, 1fr) !important;
-  }
-
-  .downtime-header {
-    flex-direction: column;
-    align-items: flex-start !important;
-  }
-
-  .downtime-columns {
-    grid-template-columns: 1fr !important;
   }
 
   .top-icon-bar {
@@ -2652,124 +2685,214 @@ const reportDescStyle = {
   lineHeight: 1.35,
 };
 
-const downtimeWrapStyle = {
+const downtimeScreenShellStyle = {
   width: "100%",
   maxWidth: 1100,
-  background: "#4a4f5f",
-  color: "#ffffff",
-  border: "2px solid #707786",
-  boxShadow: "0 10px 30px rgba(0,0,0,0.35)",
-  padding: 12,
+};
+
+const downtimeFrameStyle = {
+  width: "100%",
+  background: "#d8deea",
+  border: "2px solid #7b8799",
+  boxSizing: "border-box" as const,
+  overflow: "hidden",
+};
+
+const downtimeYellowHeaderStyle = {
+  background: "#f1ea45",
+  minHeight: 92,
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  padding: "0 18px",
+  gap: 12,
   boxSizing: "border-box" as const,
 };
 
-const downtimeHeaderStyle = {
+const downtimeHeaderTitleStyle = {
+  fontSize: 30,
+  fontWeight: 500,
+  color: "#1f2937",
+  letterSpacing: 0.4,
+};
+
+const downtimeClockWrapStyle = {
+  minWidth: 240,
+  background: "rgba(255,255,255,0.18)",
+  border: "1px solid rgba(0,0,0,0.1)",
+  padding: "8px 12px",
+  textAlign: "center" as const,
+};
+
+const downtimeClockValueStyle = {
+  fontSize: 44,
+  lineHeight: 1,
+  color: "#1f2937",
+  fontWeight: 500,
+};
+
+const downtimeClockMetaStyle = {
+  marginTop: 4,
+  fontSize: 11,
+  color: "#374151",
+  fontWeight: 700,
+};
+
+const downtimeInnerBodyStyle = {
+  padding: 12,
+  background: "#d8deea",
+  boxSizing: "border-box" as const,
+};
+
+const downtimeColumnHeadersStyle = {
+  display: "grid",
+  gridTemplateColumns: "1fr 1fr 1fr",
+  gap: 0,
+  marginBottom: 0,
+};
+
+const downtimeColumnHeaderCellStyle = {
+  background: "#d8deea",
+  color: "#3f4b5f",
+  textAlign: "center" as const,
+  fontSize: 18,
+  fontWeight: 700,
+  padding: "6px 8px",
+  borderLeft: "1px solid #b7c0d0",
+  borderRight: "1px solid #b7c0d0",
+};
+
+const downtimeColumnsGridStyle = {
+  display: "grid",
+  gridTemplateColumns: "1fr 1fr 1fr",
+  gap: 0,
+  minHeight: 320,
+};
+
+const downtimeListColumnStyle = {
+  background: "#ffffff",
+  border: "1px solid #b7c0d0",
+  display: "flex",
+  flexDirection: "column" as const,
+  padding: 6,
+};
+
+const downtimeListButtonStyle = {
+  border: "none",
+  background: "#ffffff",
+  color: "#1f2937",
+  fontSize: 16,
+  lineHeight: 1.2,
+  textAlign: "left" as const,
+  padding: "5px 6px",
+  cursor: "pointer",
+};
+
+const downtimeExplanationWrapStyle = {
+  marginTop: 10,
+};
+
+const downtimeExplanationTitleStyle = {
+  fontSize: 18,
+  color: "#3f4b5f",
+  fontWeight: 700,
+  marginBottom: 6,
+};
+
+const downtimeExplanationInputStyle = {
+  width: "100%",
+  minHeight: 72,
+  background: "#ffffff",
+  border: "1px solid #b7c0d0",
+  resize: "none" as const,
+  boxSizing: "border-box" as const,
+  padding: 10,
+  fontSize: 16,
+  outline: "none",
+};
+
+const downtimeBottomBarStyle = {
+  marginTop: 12,
   display: "flex",
   justifyContent: "space-between",
-  alignItems: "center",
-  marginBottom: 12,
-  gap: 12,
+  alignItems: "end",
+  gap: 16,
 };
 
-const downtimeTitleStyle = {
-  fontSize: 34,
-  fontWeight: 700,
-};
-
-const downtimeTimerStyle = {
-  fontSize: 34,
-  fontWeight: 700,
-  color: "#f8d34b",
-};
-
-const downtimeBodyStyle = {
-  border: "1px solid #7f8796",
-  background: "#505566",
-  padding: 14,
-};
-
-const downtimeColumnsStyle = {
-  display: "grid",
-  gridTemplateColumns: "repeat(3, 1fr)",
-  gap: 12,
-};
-
-const downtimeColumnStyle = {
-  display: "grid",
-  gap: 8,
-};
-
-const downtimeColumnHeaderStyle = {
-  fontSize: 16,
-  fontWeight: 700,
-  color: "#f8fafc",
-  marginBottom: 4,
-};
-
-const downtimeReasonButtonStyle = {
-  minHeight: 52,
-  border: "none",
-  fontSize: 15,
-  fontWeight: 700,
-  cursor: "pointer",
-  padding: "8px 10px",
-  textAlign: "left" as const,
-};
-
-const downtimeNotesWrapStyle = {
-  marginTop: 14,
-};
-
-const downtimeNotesTitleStyle = {
-  fontSize: 16,
-  fontWeight: 700,
-  marginBottom: 8,
-};
-
-const downtimeTextareaStyle = {
-  width: "100%",
-  minHeight: 130,
-  resize: "vertical" as const,
-  background: "#f8fafc",
-  color: "#111827",
-  border: "2px solid #cbd5e1",
-  padding: 12,
-  fontSize: 16,
-  boxSizing: "border-box" as const,
-};
-
-const downtimeFooterActionsStyle = {
-  marginTop: 14,
+const downtimeIconsWrapStyle = {
   display: "flex",
-  gap: 12,
+  gap: 8,
   flexWrap: "wrap" as const,
 };
 
-const downtimeBlueButtonStyle = {
-  minWidth: 160,
-  height: 56,
-  border: "none",
-  background: "#1d4ed8",
-  color: "#ffffff",
-  fontWeight: 700,
-  fontSize: 17,
+const downtimeToolIconButtonStyle = {
+  width: 74,
+  height: 74,
+  border: "1px solid #9aa6bb",
+  background: "#f8fafc",
+  display: "flex",
+  flexDirection: "column" as const,
+  alignItems: "center",
+  justifyContent: "center",
   cursor: "pointer",
 };
 
-const downtimeGreenButtonStyle = {
-  minWidth: 160,
-  height: 56,
+const downtimeToolIconEmojiStyle = {
+  fontSize: 24,
+  lineHeight: 1,
+};
+
+const downtimeToolIconLabelStyle = {
+  marginTop: 4,
+  fontSize: 11,
+  color: "#334155",
+  fontWeight: 700,
+};
+
+const downtimeActionButtonsWrapStyle = {
+  display: "flex",
+  gap: 12,
+  flexWrap: "wrap" as const,
+  alignItems: "end",
+};
+
+const downtimeBlueActionStyle = {
+  minWidth: 180,
+  height: 72,
+  border: "none",
+  background: "#2347f4",
+  color: "#ffffff",
+  fontSize: 24,
+  fontWeight: 700,
+  cursor: "pointer",
+};
+
+const downtimeStartActionStyle = {
+  minWidth: 180,
+  height: 72,
   border: "none",
   background: "#16a34a",
   color: "#ffffff",
+  fontSize: 24,
   fontWeight: 700,
-  fontSize: 17,
   cursor: "pointer",
 };
 
-const downtimeMetaStyle = {
-  marginTop: 14,
-  color: "#d1d5db",
+const downtimeResumeActionStyle = {
+  minWidth: 180,
+  height: 72,
+  border: "none",
+  background: "#58b748",
+  color: "#ffffff",
+  fontSize: 24,
   fontWeight: 700,
-  fontSize: 14,
+  cursor: "pointer",
+};
+
+const downtimeFooterMetaStyle = {
+  marginTop: 10,
+  textAlign: "right" as const,
+  color: "#475569",
+  fontSize: 12,
+  fontWeight: 700,
 };
