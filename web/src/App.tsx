@@ -3,6 +3,16 @@ import { getStationConfig, getStationLineup, loginOperator } from "./api/client"
 
 type AppScreen = "login" | "partMenu" | "hmi" | "downtime";
 
+type TopActionKind =
+  | "supervisor"
+  | "material"
+  | "quality"
+  | "maint"
+  | "workinst"
+  | "reports";
+
+type ActionRequestKind = Exclude<TopActionKind, "reports">;
+
 type PartMaster = {
   id: string;
   externalPartNumber: string;
@@ -43,6 +53,21 @@ type DowntimeRecord = {
   endedAt?: number;
   notes: string;
 };
+
+type ShiftInfo = {
+  displayText: string;
+};
+
+type ActionModalState =
+  | {
+      mode: "action";
+      kind: ActionRequestKind;
+      detail: string;
+    }
+  | {
+      mode: "reports";
+    }
+  | null;
 
 const demoDisplayParts: DisplayPart[] = [
   {
@@ -103,7 +128,7 @@ const demoDisplayParts: DisplayPart[] = [
   },
 ];
 
-function App() {
+export default function App() {
   const [screen, setScreen] = useState<AppScreen>("login");
   const [employeeId, setEmployeeId] = useState("");
   const [crewSize, setCrewSize] = useState("1");
@@ -404,7 +429,12 @@ function App() {
   };
 
   return (
-    <main style={mainShellStyle}>
+    <main
+      style={{
+        ...mainShellStyle,
+        alignItems: screen === "login" ? "center" : "flex-start",
+      }}
+    >
       <style>{responsiveCss}</style>
 
       {screen === "login" && (
@@ -445,6 +475,7 @@ function App() {
           employeeId={employeeId}
           crewSize={crewSize}
           part={selectedPart}
+          lineupParts={displayParts}
           machineMessage={machineMessage}
           goodCount={goodCount}
           suspectCount={suspectCount}
@@ -456,6 +487,7 @@ function App() {
           onChangePart={handleChangePart}
           onLogout={handleLogout}
           onOpenDowntime={handleOpenDowntime}
+          onSetMachineMessage={setMachineMessage}
         />
       )}
 
@@ -604,9 +636,7 @@ function PartMenuScreen({
                             ...lineupItemStyle,
                             background: isHighlighted ? "#1d4ed8" : "#f8fafc",
                             color: isHighlighted ? "#ffffff" : "#111827",
-                            border: isHighlighted
-                              ? "3px solid #16a34a"
-                              : "2px solid #cbd5e1",
+                            border: isHighlighted ? "3px solid #16a34a" : "2px solid #cbd5e1",
                           }}
                         >
                           <div className="lineup-top-row" style={lineupTopRowStyle}>
@@ -675,6 +705,7 @@ function HmiScreen({
   employeeId,
   crewSize,
   part,
+  lineupParts,
   machineMessage,
   goodCount,
   suspectCount,
@@ -686,6 +717,7 @@ function HmiScreen({
   onChangePart,
   onLogout,
   onOpenDowntime,
+  onSetMachineMessage,
 }: {
   hmiCellCode: string;
   hmiVersion: string;
@@ -693,6 +725,7 @@ function HmiScreen({
   employeeId: string;
   crewSize: string;
   part: DisplayPart;
+  lineupParts: DisplayPart[];
   machineMessage: string;
   goodCount: number;
   suspectCount: number;
@@ -704,9 +737,84 @@ function HmiScreen({
   onChangePart: () => void;
   onLogout: () => void;
   onOpenDowntime: () => void;
+  onSetMachineMessage: (message: string) => void;
 }) {
+  const [now, setNow] = useState(new Date());
+  const [modalState, setModalState] = useState<ActionModalState>(null);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setNow(new Date());
+    }, 1000);
+
+    return () => window.clearInterval(timer);
+  }, []);
+
   const scanIndicatorColor =
     scanStatus === "success" ? "#22c55e" : scanStatus === "error" ? "#ef4444" : "#f3f4f6";
+
+  const shiftInfo = getShiftInfo(now);
+  const dateText = formatUiDate(now);
+  const timeText = formatUiTime(now);
+
+  const sortedLineup = useMemo(() => {
+    return [...lineupParts].sort((a, b) => Number(a.sequence || 0) - Number(b.sequence || 0));
+  }, [lineupParts]);
+
+  const footerItems = [
+    { label: "DATE", value: dateText },
+    { label: "TIME", value: timeText },
+    { label: "SHIFT", value: shiftInfo.displayText },
+    { label: "CREW SIZE", value: crewSize || "-" },
+    { label: "EMPLOYEE ID", value: employeeId || "-" },
+    { label: "STATION", value: stationId || "-" },
+    { label: "SEQUENCE", value: part.sequence || "-" },
+    { label: "PART #", value: part.externalPartNumber || "-" },
+  ];
+
+  const openTopAction = (kind: TopActionKind) => {
+    if (kind === "reports") {
+      setModalState({ mode: "reports" });
+      onSetMachineMessage("Daily line-up report opened.");
+      return;
+    }
+
+    setModalState({
+      mode: "action",
+      kind,
+      detail: "",
+    });
+    onSetMachineMessage(`${getActionLabel(kind)} window opened.`);
+  };
+
+  const closeModal = () => {
+    setModalState(null);
+    onSetMachineMessage("Action window closed.");
+  };
+
+  const updateModalDetail = (value: string) => {
+    setModalState((current) => {
+      if (!current || current.mode !== "action") return current;
+      return {
+        ...current,
+        detail: value,
+      };
+    });
+  };
+
+  const submitModal = () => {
+    if (!modalState || modalState.mode !== "action") return;
+
+    const detail = modalState.detail.trim();
+
+    if (!detail) {
+      onSetMachineMessage("Please enter details before submit.");
+      return;
+    }
+
+    onSetMachineMessage(`${getActionLabel(modalState.kind)} submitted: ${detail}`);
+    setModalState(null);
+  };
 
   return (
     <section style={hmiSectionStyle}>
@@ -715,18 +823,36 @@ function HmiScreen({
           <div className="hmi-title" style={hmiTitleStyle}>
             {hmiCellCode}
           </div>
-          <div style={{ fontSize: 12, color: "#e5e7eb", fontWeight: 700 }}>
-            {hmiVersion}
-          </div>
+          <div style={{ fontSize: 12, color: "#e5e7eb", fontWeight: 700 }}>{hmiVersion}</div>
         </div>
 
-        <div style={iconBarStyle}>
-          <TopActionIcon kind="supervisor" label="SUPERVSR" />
-          <TopActionIcon kind="material" label="MATERIAL" />
-          <TopActionIcon kind="quality" label="QUALITY" />
-          <TopActionIcon kind="maint" label="MAINT" />
-          <TopActionIcon kind="workinst" label="WORK INST" />
-          <TopActionIcon kind="reports" label="REPORTS" />
+        <div className="top-icon-bar" style={iconBarStyle}>
+          <TopActionIcon
+            kind="supervisor"
+            label="SUPERVSR"
+            onPress={() => openTopAction("supervisor")}
+          />
+          <TopActionIcon
+            kind="material"
+            label="MATERIAL"
+            onPress={() => openTopAction("material")}
+          />
+          <TopActionIcon
+            kind="quality"
+            label="QUALITY"
+            onPress={() => openTopAction("quality")}
+          />
+          <TopActionIcon kind="maint" label="MAINT" onPress={() => openTopAction("maint")} />
+          <TopActionIcon
+            kind="workinst"
+            label="WORK INST"
+            onPress={() => openTopAction("workinst")}
+          />
+          <TopActionIcon
+            kind="reports"
+            label="REPORTS"
+            onPress={() => openTopAction("reports")}
+          />
         </div>
       </div>
 
@@ -803,7 +929,7 @@ function HmiScreen({
               display: "grid",
               gridTemplateColumns: "1fr 1fr",
               gap: 0,
-              marginBottom: 0,
+              marginBottom: 6,
             }}
           >
             <CounterHeader title="CONTAINER" />
@@ -811,7 +937,7 @@ function HmiScreen({
           </div>
 
           <div className="production-panel-grid" style={productionPanelGridStyle}>
-            <div>
+            <div style={containerColumnStyle}>
               <div
                 style={{
                   display: "grid",
@@ -836,15 +962,19 @@ function HmiScreen({
               </div>
 
               <div style={serialListBox}>
-                {packedSerials.map((serial) => (
-                  <div key={serial} style={{ textAlign: "left" }}>
-                    {serial}
-                  </div>
-                ))}
+                {packedSerials.length === 0 ? (
+                  <div style={emptySerialStyle}>No scans yet.</div>
+                ) : (
+                  packedSerials.map((serial) => (
+                    <div key={serial} style={{ textAlign: "left" }}>
+                      {serial}
+                    </div>
+                  ))
+                )}
               </div>
             </div>
 
-            <div>
+            <div style={productionColumnStyle}>
               <div
                 style={{
                   width: 66,
@@ -873,6 +1003,7 @@ function HmiScreen({
                   border: "2px solid #9ca3af",
                   padding: "10px 14px",
                   color: "#111827",
+                  flex: 1,
                 }}
               >
                 <MetricRow label="SCHEDULED" value={part.orderQty || ""} color="#111827" />
@@ -885,10 +1016,18 @@ function HmiScreen({
         </div>
 
         <div style={rightPanelStyle}>
-          <div>STATION: {stationId}</div>
-          <div>EMPLOYEE ID: {employeeId}</div>
-          <div>CREW SIZE: {crewSize}</div>
-          <div style={{ marginTop: 10 }}>
+          <div style={rightPanelMetaWrapStyle}>
+            <div style={rightInfoTextStyle}>STATION: {stationId}</div>
+            <div style={rightInfoTextStyle}>EMPLOYEE ID: {employeeId || "-"}</div>
+            <div style={rightInfoTextStyle}>CREW SIZE: {crewSize || "-"}</div>
+            <div style={rightInfoTextStyle}>DATE: {dateText}</div>
+            <div style={rightInfoTextStyle}>TIME: {timeText}</div>
+            <div style={rightInfoTextStyle}>SHIFT: {shiftInfo.displayText}</div>
+          </div>
+
+          <div style={rightPanelSpacerStyle} />
+
+          <div style={rightPanelButtonWrapStyle}>
             <button style={primaryActionStyle} onClick={onLogout}>
               LOG OUT
             </button>
@@ -899,15 +1038,92 @@ function HmiScreen({
       <div style={messageBarStyle}>{machineMessage}</div>
 
       <div className="footer-tags-grid" style={footerTagsGridStyle}>
-        <FooterTag text="Season Number" />
-        <FooterTag text="Shift" />
-        <FooterTag text="Crew Size" />
-        <FooterTag text="Employee ID" />
-        <FooterTag text="Job Number" />
-        <FooterTag text="Label Data" />
-        <FooterTag text="Go to Send" />
-        <FooterTag text="PLC Data" />
+        {footerItems.map((item) => (
+          <FooterTag key={item.label} label={item.label} value={item.value} />
+        ))}
       </div>
+
+      {modalState && (
+        <div style={modalOverlayStyle}>
+          <div className="touch-modal-panel" style={modalPanelStyle}>
+            {modalState.mode === "reports" ? (
+              <>
+                <div style={modalTitleStyle}>DAILY LINE-UP REPORT</div>
+
+                <div style={reportMetaStyle}>
+                  <span>DATE: {dateText}</span>
+                  <span>SHIFT: {shiftInfo.displayText}</span>
+                  <span>STATION: {stationId}</span>
+                </div>
+
+                <div style={reportsListStyle}>
+                  {sortedLineup.length === 0 ? (
+                    <div style={reportEmptyStyle}>No line-up loaded yet.</div>
+                  ) : (
+                    sortedLineup.map((item) => {
+                      const isActive = item.lineupId === part.lineupId;
+
+                      return (
+                        <div
+                          key={item.lineupId}
+                          style={{
+                            ...reportRowStyle,
+                            border: isActive ? "2px solid #16a34a" : "1px solid #8b93a3",
+                            background: isActive ? "#455ea6" : "#5a6070",
+                          }}
+                        >
+                          <div style={reportRowTopStyle}>
+                            <span style={reportSeqStyle}>SEQ {item.sequence || "-"}</span>
+                            <span style={reportQtyStyle}>
+                              ORDER {item.orderQty || "-"} / PACK {item.packQty || "-"}
+                            </span>
+                          </div>
+                          <div style={reportPartStyle}>{item.externalPartNumber}</div>
+                          <div style={reportDescStyle}>{item.description}</div>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+
+                <div style={modalButtonsRowStyle}>
+                  <button style={modalCancelButtonStyle} onClick={closeModal}>
+                    CLOSE
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <div style={modalTitleStyle}>{getActionLabel(modalState.kind)}</div>
+
+                <div style={modalMetaInfoStyle}>
+                  <div>STATION: {stationId}</div>
+                  <div>EMPLOYEE ID: {employeeId || "-"}</div>
+                  <div>SHIFT: {shiftInfo.displayText}</div>
+                </div>
+
+                <div style={modalInputLabelStyle}>DETAILS</div>
+
+                <textarea
+                  value={modalState.detail}
+                  onChange={(e) => updateModalDetail(e.target.value)}
+                  style={modalTextareaStyle}
+                  placeholder={`Enter ${getActionLabel(modalState.kind).toLowerCase()} details...`}
+                />
+
+                <div style={modalButtonsRowStyle}>
+                  <button style={modalSubmitButtonStyle} onClick={submitModal}>
+                    SUBMIT
+                  </button>
+                  <button style={modalCancelButtonStyle} onClick={closeModal}>
+                    CANCEL
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
     </section>
   );
 }
@@ -1043,12 +1259,14 @@ function LineMeta({ label, value }: { label: string; value: string }) {
 function TopActionIcon({
   kind,
   label,
+  onPress,
 }: {
-  kind: "supervisor" | "material" | "quality" | "maint" | "workinst" | "reports";
+  kind: TopActionKind;
   label: string;
+  onPress: () => void;
 }) {
   return (
-    <div style={iconCardStyle}>
+    <button type="button" style={iconCardButtonStyle} onClick={onPress}>
       <div style={iconTitleStyle}>{label}</div>
       <div style={iconBodyStyle}>
         {kind === "supervisor" && (
@@ -1318,7 +1536,7 @@ function TopActionIcon({
           </div>
         )}
       </div>
-    </div>
+    </button>
   );
 }
 
@@ -1423,17 +1641,67 @@ function MetricRow({
   );
 }
 
-function FooterTag({ text }: { text: string }) {
+function FooterTag({ label, value }: { label: string; value: string }) {
   return (
     <div
       style={{
         borderTop: "1px solid #7f8796",
-        paddingTop: 2,
+        paddingTop: 4,
       }}
     >
-      {text}
+      <div style={footerLabelStyle}>{label}</div>
+      <div style={footerValueStyle}>{value}</div>
     </div>
   );
+}
+
+function getShiftInfo(date: Date): ShiftInfo {
+  const hour = date.getHours();
+
+  if (hour >= 22 || hour < 6) {
+    return {
+      displayText: "Shift 1 - Midnight",
+    };
+  }
+
+  if (hour >= 6 && hour < 14) {
+    return {
+      displayText: "Shift 2 - Morning",
+    };
+  }
+
+  return {
+    displayText: "Shift 3 - Afternoon",
+  };
+}
+
+function getActionLabel(kind: ActionRequestKind): string {
+  const labels: Record<ActionRequestKind, string> = {
+    supervisor: "Supervisor Request",
+    material: "Material Request",
+    quality: "Quality Request",
+    maint: "Maintenance Request",
+    workinst: "Work Instruction Request",
+  };
+
+  return labels[kind];
+}
+
+function formatUiDate(date: Date) {
+  return new Intl.DateTimeFormat("en-CA", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(date);
+}
+
+function formatUiTime(date: Date) {
+  return new Intl.DateTimeFormat("en-CA", {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  }).format(date);
 }
 
 function formatElapsedTime(totalSeconds: number) {
@@ -1444,6 +1712,26 @@ function formatElapsedTime(totalSeconds: number) {
 }
 
 const responsiveCss = `
+@media (max-width: 1100px) {
+  .hmi-main-grid {
+    grid-template-columns: 250px minmax(0, 1fr) 220px !important;
+  }
+
+  .footer-tags-grid {
+    grid-template-columns: repeat(4, 1fr) !important;
+  }
+}
+
+@media (max-height: 820px) {
+  .hmi-title {
+    font-size: 34px !important;
+  }
+
+  .top-icon-bar button {
+    min-height: 52px !important;
+  }
+}
+
 @media (max-width: 900px) {
   .lineup-content-wrap {
     grid-template-columns: 1fr !important;
@@ -1465,6 +1753,14 @@ const responsiveCss = `
     grid-column: 1 / -1;
     text-align: left !important;
     margin-top: 4px;
+  }
+
+  .footer-tags-grid {
+    grid-template-columns: repeat(3, 1fr) !important;
+  }
+
+  .touch-modal-panel {
+    width: min(92vw, 760px) !important;
   }
 }
 
@@ -1518,6 +1814,12 @@ const responsiveCss = `
   .downtime-columns {
     grid-template-columns: 1fr !important;
   }
+
+  .top-icon-bar {
+    width: 100%;
+    display: grid !important;
+    grid-template-columns: repeat(3, 1fr);
+  }
 }
 
 @media (max-width: 520px) {
@@ -1532,6 +1834,15 @@ const responsiveCss = `
   .footer-tags-grid {
     grid-template-columns: 1fr !important;
   }
+
+  .top-icon-bar {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .touch-modal-panel {
+    width: min(94vw, 760px) !important;
+    padding: 16px !important;
+  }
 }
 `;
 
@@ -1540,15 +1851,15 @@ const mainShellStyle = {
   background: "#262c35",
   display: "flex",
   justifyContent: "center",
-  alignItems: "center",
-  padding: 16,
+  padding: "10px 16px 18px",
   boxSizing: "border-box" as const,
   fontFamily: "Arial, sans-serif",
+  overflowY: "auto" as const,
 };
 
 const loginCardStyle = {
   width: "100%",
-  maxWidth: 620,
+  maxWidth: 680,
   background: "#474d5d",
   border: "2px solid #707786",
   padding: 0,
@@ -1579,12 +1890,12 @@ const loginSubTitleStyle = {
 };
 
 const loginPanelStyle = {
-  padding: 24,
+  padding: 26,
 };
 
 const loginGridStyle = {
   display: "grid",
-  gridTemplateColumns: "170px 1fr",
+  gridTemplateColumns: "180px 1fr",
   gap: 16,
   alignItems: "center",
 };
@@ -1596,7 +1907,7 @@ const loginLabelStyle = {
 };
 
 const inputStyle = {
-  height: 52,
+  height: 56,
   border: "1px solid #9ca3af",
   background: "#f8fafc",
   padding: "0 12px",
@@ -1613,7 +1924,7 @@ const loginButtonsRowStyle = {
 };
 
 const greenLoginButtonStyle = {
-  height: 58,
+  height: 62,
   border: "none",
   background: "#16a34a",
   color: "#ffffff",
@@ -1623,9 +1934,9 @@ const greenLoginButtonStyle = {
 };
 
 const redLoginButtonStyle = {
-  height: 58,
+  height: 62,
   border: "none",
-  background: "#b91c1c",
+  background: "#d31717",
   color: "#ffffff",
   fontWeight: 700,
   fontSize: 18,
@@ -1633,9 +1944,9 @@ const redLoginButtonStyle = {
 };
 
 const grayLoginButtonStyle = {
-  height: 58,
+  height: 62,
   border: "none",
-  background: "#6b7280",
+  background: "#7b8496",
   color: "#ffffff",
   fontWeight: 700,
   fontSize: 18,
@@ -1834,8 +2145,9 @@ const selectedPreviewTitleStyle = {
 };
 
 const primaryActionStyle = {
-  minWidth: 180,
-  height: 48,
+  width: "100%",
+  minWidth: 0,
+  height: 62,
   border: "none",
   background: "#16a34a",
   color: "#ffffff",
@@ -1848,18 +2160,21 @@ const primaryActionStyle = {
 const iconBarStyle = {
   display: "flex",
   gap: 6,
-  alignItems: "flex-start",
+  alignItems: "stretch",
   flexWrap: "wrap" as const,
 };
 
-const iconCardStyle = {
-  width: 72,
-  height: 48,
+const iconCardButtonStyle = {
+  width: 76,
+  minHeight: 60,
   background: "#f8fafc",
   border: "1px solid #cbd5e1",
   display: "flex",
   flexDirection: "column" as const,
   overflow: "hidden",
+  padding: 0,
+  cursor: "pointer",
+  touchAction: "manipulation" as const,
 };
 
 const iconTitleStyle = {
@@ -1966,8 +2281,9 @@ const hmiSectionStyle = {
   color: "#ffffff",
   border: "2px solid #707786",
   boxShadow: "0 10px 30px rgba(0,0,0,0.35)",
-  padding: 12,
+  padding: 10,
   boxSizing: "border-box" as const,
+  position: "relative" as const,
 };
 
 const hmiTopHeaderStyle = {
@@ -1987,17 +2303,21 @@ const hmiTitleStyle = {
 };
 
 const hmiMainGridStyle = {
-  marginTop: 12,
+  marginTop: 10,
   display: "grid",
-  gridTemplateColumns: "280px 1fr 280px",
+  gridTemplateColumns: "280px minmax(0, 1fr) 280px",
   gap: 10,
+  alignItems: "stretch",
+  minHeight: 0,
 };
 
 const hmiActionsGridStyle = {
   display: "grid",
   gridTemplateColumns: "1fr 1fr",
   gap: 8,
-  alignContent: "start",
+  height: "100%",
+  gridAutoRows: "1fr",
+  minHeight: 0,
 };
 
 const panelBox = {
@@ -2005,13 +2325,31 @@ const panelBox = {
   background: "#505566",
   padding: 8,
   boxSizing: "border-box" as const,
+  height: "100%",
+  minHeight: 0,
+  display: "flex",
+  flexDirection: "column" as const,
 };
 
 const productionPanelGridStyle = {
   display: "grid",
   gridTemplateColumns: "1fr 1fr",
   gap: 8,
-  alignItems: "start",
+  alignItems: "stretch",
+  flex: 1,
+  minHeight: 0,
+};
+
+const containerColumnStyle = {
+  display: "flex",
+  flexDirection: "column" as const,
+  minHeight: 0,
+};
+
+const productionColumnStyle = {
+  display: "flex",
+  flexDirection: "column" as const,
+  minHeight: 0,
 };
 
 const rightPanelStyle = {
@@ -2020,17 +2358,48 @@ const rightPanelStyle = {
   padding: 10,
   color: "#d1d5db",
   fontSize: 13,
-  lineHeight: 1.6,
+  height: "100%",
+  minHeight: 0,
+  display: "grid",
+  gridTemplateRows: "auto 1fr auto",
+  gap: 10,
+  boxSizing: "border-box" as const,
+  overflow: "hidden" as const,
+};
+
+const rightPanelMetaWrapStyle = {
+  display: "grid",
+  gap: 6,
+  alignContent: "start",
+  paddingTop: 4,
+};
+
+const rightPanelSpacerStyle = {
+  minHeight: 0,
+};
+
+const rightPanelButtonWrapStyle = {
+  display: "flex",
+  alignItems: "end",
+};
+
+const rightInfoTextStyle = {
+  fontSize: 14,
+  color: "#f3f4f6",
+  fontWeight: 700,
+  lineHeight: 1.3,
+  textAlign: "center" as const,
 };
 
 const actionBase = {
-  minHeight: 88,
+  minHeight: 72,
   border: "none",
-  fontSize: 22,
+  fontSize: 20,
   fontWeight: 700,
   cursor: "pointer",
   color: "#ffffff",
-  lineHeight: 1.1,
+  lineHeight: 1.05,
+  touchAction: "manipulation" as const,
 };
 
 const greenBtn = {
@@ -2058,8 +2427,8 @@ const scanTestBtn = {
   ...actionBase,
   background: "#0f766e",
   gridColumn: "1 / span 2",
-  minHeight: 60,
-  fontSize: 18,
+  minHeight: 56,
+  fontSize: 17,
 };
 
 const counterLabel = {
@@ -2075,9 +2444,9 @@ const counterLabel = {
 const counterValue = {
   background: "#f8fafc",
   color: "#111827",
-  fontSize: 34,
+  fontSize: 30,
   fontWeight: 700,
-  height: 60,
+  height: 64,
   border: "1px solid #9ca3af",
   display: "flex",
   alignItems: "center",
@@ -2088,23 +2457,30 @@ const serialListBox = {
   background: "#f8fafc",
   border: "1px solid #9ca3af",
   color: "#111827",
-  minHeight: 210,
+  flex: 1,
+  minHeight: 150,
   padding: "8px 10px",
   fontFamily: "Consolas, monospace",
-  fontSize: 16,
-  lineHeight: 1.45,
+  fontSize: 15,
+  lineHeight: 1.35,
   boxSizing: "border-box" as const,
   overflowY: "auto" as const,
   textAlign: "left" as const,
 };
 
+const emptySerialStyle = {
+  color: "#6b7280",
+  fontFamily: "Arial, sans-serif",
+  fontSize: 15,
+};
+
 const messageBarStyle = {
-  marginTop: 10,
+  marginTop: 8,
   border: "1px solid #8992a3",
   background: "#d1d5db",
   color: "#111827",
   fontSize: 14,
-  padding: "6px 12px",
+  padding: "8px 12px",
   fontWeight: 700,
   textAlign: "left" as const,
 };
@@ -2112,73 +2488,232 @@ const messageBarStyle = {
 const footerTagsGridStyle = {
   marginTop: 4,
   display: "grid",
-  gridTemplateColumns: "repeat(8, 1fr)",
-  gap: 4,
-  fontSize: 10,
+  gridTemplateColumns: "repeat(8, minmax(0, 1fr))",
+  gap: 8,
+};
+
+const footerLabelStyle = {
   color: "#d1d5db",
+  fontSize: 10,
+  fontWeight: 700,
+  marginBottom: 2,
+};
+
+const footerValueStyle = {
+  color: "#ffffff",
+  fontSize: 12,
+  fontWeight: 700,
+  minHeight: 16,
+  wordBreak: "break-word" as const,
+};
+
+const modalOverlayStyle = {
+  position: "fixed" as const,
+  inset: 0,
+  background: "rgba(15, 23, 42, 0.62)",
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  padding: 18,
+  zIndex: 999,
+};
+
+const modalPanelStyle = {
+  width: "min(760px, 92vw)",
+  background: "#505566",
+  border: "2px solid #8790a1",
+  boxShadow: "0 18px 48px rgba(0,0,0,0.4)",
+  padding: 22,
+  boxSizing: "border-box" as const,
+};
+
+const modalTitleStyle = {
+  fontSize: 26,
+  fontWeight: 700,
+  color: "#ffffff",
+  marginBottom: 14,
+};
+
+const modalMetaInfoStyle = {
+  display: "grid",
+  gap: 4,
+  color: "#d1d5db",
+  fontSize: 14,
+  marginBottom: 14,
+  fontWeight: 700,
+};
+
+const modalInputLabelStyle = {
+  fontSize: 13,
+  color: "#d1d5db",
+  fontWeight: 700,
+  marginBottom: 8,
+};
+
+const modalTextareaStyle = {
+  width: "100%",
+  minHeight: 180,
+  resize: "vertical" as const,
+  background: "#f8fafc",
+  color: "#111827",
+  border: "2px solid #cbd5e1",
+  padding: 14,
+  fontSize: 16,
+  boxSizing: "border-box" as const,
+  outline: "none",
+};
+
+const modalButtonsRowStyle = {
+  display: "flex",
+  justifyContent: "flex-end",
+  gap: 12,
+  flexWrap: "wrap" as const,
+  marginTop: 18,
+};
+
+const modalSubmitButtonStyle = {
+  minWidth: 150,
+  height: 54,
+  border: "none",
+  background: "#16a34a",
+  color: "#ffffff",
+  fontSize: 16,
+  fontWeight: 700,
+  cursor: "pointer",
+};
+
+const modalCancelButtonStyle = {
+  minWidth: 150,
+  height: 54,
+  border: "none",
+  background: "#8b1e2d",
+  color: "#ffffff",
+  fontSize: 16,
+  fontWeight: 700,
+  cursor: "pointer",
+};
+
+const reportMetaStyle = {
+  display: "flex",
+  gap: 18,
+  flexWrap: "wrap" as const,
+  color: "#d1d5db",
+  fontSize: 14,
+  fontWeight: 700,
+  marginBottom: 14,
+};
+
+const reportsListStyle = {
+  maxHeight: 420,
+  overflowY: "auto" as const,
+  display: "grid",
+  gap: 10,
+};
+
+const reportEmptyStyle = {
+  background: "#e5e7eb",
+  color: "#111827",
+  padding: 18,
+  fontSize: 16,
+  fontWeight: 700,
+};
+
+const reportRowStyle = {
+  padding: 12,
+  color: "#ffffff",
+};
+
+const reportRowTopStyle = {
+  display: "flex",
+  justifyContent: "space-between",
+  gap: 12,
+  marginBottom: 6,
+  flexWrap: "wrap" as const,
+};
+
+const reportSeqStyle = {
+  fontSize: 13,
+  fontWeight: 700,
+};
+
+const reportQtyStyle = {
+  fontSize: 13,
+  fontWeight: 700,
+};
+
+const reportPartStyle = {
+  fontSize: 18,
+  fontWeight: 700,
+  marginBottom: 4,
+};
+
+const reportDescStyle = {
+  fontSize: 14,
+  lineHeight: 1.35,
 };
 
 const downtimeWrapStyle = {
   width: "100%",
-  maxWidth: 980,
-  background: "#d1d5db",
-  border: "2px solid #9ca3af",
+  maxWidth: 1100,
+  background: "#4a4f5f",
+  color: "#ffffff",
+  border: "2px solid #707786",
   boxShadow: "0 10px 30px rgba(0,0,0,0.35)",
+  padding: 12,
+  boxSizing: "border-box" as const,
 };
 
 const downtimeHeaderStyle = {
   display: "flex",
   justifyContent: "space-between",
   alignItems: "center",
-  background: "#e7dd2f",
-  padding: "14px 18px",
+  marginBottom: 12,
+  gap: 12,
 };
 
 const downtimeTitleStyle = {
-  fontSize: 26,
+  fontSize: 34,
   fontWeight: 700,
-  color: "#111827",
 };
 
 const downtimeTimerStyle = {
   fontSize: 34,
   fontWeight: 700,
-  color: "#111827",
+  color: "#f8d34b",
 };
 
 const downtimeBodyStyle = {
-  padding: 16,
-  background: "#d9dde4",
+  border: "1px solid #7f8796",
+  background: "#505566",
+  padding: 14,
 };
 
 const downtimeColumnsStyle = {
   display: "grid",
-  gridTemplateColumns: "1fr 1fr 1fr",
+  gridTemplateColumns: "repeat(3, 1fr)",
   gap: 12,
 };
 
 const downtimeColumnStyle = {
-  background: "#f8fafc",
-  border: "1px solid #94a3b8",
-  minHeight: 300,
-  padding: 10,
+  display: "grid",
+  gap: 8,
 };
 
 const downtimeColumnHeaderStyle = {
   fontSize: 16,
   fontWeight: 700,
-  marginBottom: 10,
-  color: "#374151",
+  color: "#f8fafc",
+  marginBottom: 4,
 };
 
 const downtimeReasonButtonStyle = {
-  width: "100%",
-  textAlign: "left" as const,
-  border: "1px solid #cbd5e1",
-  padding: "8px 10px",
-  fontSize: 13,
-  marginBottom: 6,
+  minHeight: 52,
+  border: "none",
+  fontSize: 15,
+  fontWeight: 700,
   cursor: "pointer",
+  padding: "8px 10px",
+  textAlign: "left" as const,
 };
 
 const downtimeNotesWrapStyle = {
@@ -2186,56 +2721,55 @@ const downtimeNotesWrapStyle = {
 };
 
 const downtimeNotesTitleStyle = {
-  fontSize: 14,
+  fontSize: 16,
   fontWeight: 700,
-  color: "#374151",
-  marginBottom: 6,
+  marginBottom: 8,
 };
 
 const downtimeTextareaStyle = {
   width: "100%",
-  minHeight: 90,
+  minHeight: 130,
   resize: "vertical" as const,
-  padding: 10,
-  border: "1px solid #94a3b8",
+  background: "#f8fafc",
+  color: "#111827",
+  border: "2px solid #cbd5e1",
+  padding: 12,
+  fontSize: 16,
   boxSizing: "border-box" as const,
-  fontSize: 14,
 };
 
 const downtimeFooterActionsStyle = {
-  display: "flex",
-  justifyContent: "flex-end",
-  gap: 12,
   marginTop: 14,
+  display: "flex",
+  gap: 12,
+  flexWrap: "wrap" as const,
 };
 
 const downtimeBlueButtonStyle = {
   minWidth: 160,
-  height: 54,
+  height: 56,
   border: "none",
   background: "#1d4ed8",
   color: "#ffffff",
   fontWeight: 700,
-  fontSize: 18,
+  fontSize: 17,
   cursor: "pointer",
 };
 
 const downtimeGreenButtonStyle = {
   minWidth: 160,
-  height: 54,
+  height: 56,
   border: "none",
-  background: "#22c55e",
+  background: "#16a34a",
   color: "#ffffff",
   fontWeight: 700,
-  fontSize: 18,
+  fontSize: 17,
   cursor: "pointer",
 };
 
 const downtimeMetaStyle = {
-  marginTop: 12,
-  fontSize: 13,
-  color: "#4b5563",
+  marginTop: 14,
+  color: "#d1d5db",
   fontWeight: 700,
+  fontSize: 14,
 };
-
-export default App;
