@@ -415,13 +415,24 @@ function buildCatalogFromRaw(raw: string): CatalogPart[] {
 const PART_CATALOG: CatalogPart[] = buildCatalogFromRaw(RAW_PART_CATALOG);
 
 type CameraScanMode = "labelPart" | "labelQty" | "partBarcode";
+function stripPartScanPrefix(value: string) {
+  return String(value || "")
+    .toUpperCase()
+    .replace(/^PARTNO/, "")
+    .replace(/^PARTNUMBER/, "")
+    .replace(/^PN/, "")
+    .replace(/^P(?=[0-9A-Z]{5,})/, "")
+    .trim();
+}
 
 function normalizeCatalogKey(value: string) {
-  return String(value || "")
+  const withoutPrefix = stripPartScanPrefix(value);
+
+  return withoutPrefix
     .toUpperCase()
     .replace(/\s+/g, "")
     .replace(/-/g, "")
-    .replace(/[()]/g, "0")
+    .replace(/[()]/g, "")
     .replace(/O/g, "0")
     .replace(/I/g, "1")
     .replace(/L/g, "1")
@@ -433,17 +444,17 @@ function normalizeScanValue(value: string) {
 }
 
 function tryExtractPartNumber(rawValue: string) {
-  return String(rawValue || "")
+  const cleaned = stripPartScanPrefix(rawValue)
     .toUpperCase()
     .replace(/\s+/g, "")
-    .replace(/\)/g, "0")
-    .replace(/\(/g, "0")
+    .replace(/[()]/g, "")
     .replace(/O/g, "0")
     .replace(/I/g, "1")
     .replace(/L/g, "1")
     .trim();
-}
 
+  return cleaned;
+}
 function extractQuantityFromScan(rawValue: string) {
   const cleaned = String(rawValue || "").toUpperCase().trim();
 
