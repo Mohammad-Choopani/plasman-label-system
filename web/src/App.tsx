@@ -1,28 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { getStationConfig, getStationLineup, loginOperator } from "./api/client";
+import { getStationConfig, loginOperator } from "./api/client";
 
-type AppScreen = "login" | "partMenu" | "hmi" | "downtime";
-
-type TopActionKind =
-  | "supervisor"
-  | "material"
-  | "quality"
-  | "maint"
-  | "workinst"
-  | "reports";
-
-type ActionRequestKind = Exclude<TopActionKind, "reports">;
-
-type PartMaster = {
-  id: string;
-  externalPartNumber: string;
-  description: string;
-  customerPartNumber: string;
-  arNumber: string;
-  position: string;
-  colour: string;
-  fixtureId: string;
-};
+type AppScreen = "login" | "partMenu" | "hmi";
+type ScanStage = "idle" | "labelCamera" | "partCamera";
+type ScanStatus = "idle" | "success" | "error";
+type AlertLevel = "info" | "success" | "warning" | "error";
+type SessionScanStatus = "active" | "defect";
 
 type StationConfigData = {
   stationId: string;
@@ -31,1803 +14,459 @@ type StationConfigData = {
   version?: string;
 };
 
-type SchedulerLineupItem = {
-  lineupId: string;
-  sequence: string;
-  orderQty: string;
-  packQty: string;
-  part: PartMaster;
+type CatalogPart = {
+  externalPartNumber: string;
+  internalNumber: string;
+  description: string;
 };
 
-type DisplayPart = PartMaster & {
-  lineupId: string;
-  sequence: string;
-  orderQty: string;
-  packQty: string;
+type AlertItem = {
+  id: string;
+  level: AlertLevel;
+  message: string;
+  createdAt: number;
 };
 
-type DowntimeRecord = {
-  category: string;
-  reason: string;
+type SessionScanRecord = {
+  id: string;
+  rawBarcode: string;
+  resolvedExternalPartNumber: string;
+  status: SessionScanStatus;
+  scannedAt: number;
+};
+
+type LabelDetailsDraft = {
+  externalPartNumber: string;
+  internalNumber: string;
+  description: string;
+  packagingQty: string;
+  skdQty: string;
+};
+
+type LabelSession = {
+  sessionId: string;
+  externalPartNumber: string;
+  internalNumber: string;
+  description: string;
+  packagingQty: number;
+  skdQty: number;
+  packedQty: number;
+  remainingQty: number;
+  defectQty: number;
+  status: "idle" | "active" | "completed" | "error";
   startedAt: number;
-  endedAt?: number;
-  notes: string;
+  lastScannedValue: string;
+  lastResolvedExternalPartNumber: string;
+  scanHistory: SessionScanRecord[];
+  actionHistory: string[];
 };
 
-type ShiftInfo = {
-  displayText: string;
+type CameraScanModalProps = {
+  isOpen: boolean;
+  title: string;
+  helperText: string;
+  onClose: () => void;
+  onDetected: (value: string) => void;
 };
 
-type ActionModalState =
-  | {
-      mode: "action";
-      kind: ActionRequestKind;
-      detail: string;
-    }
-  | {
-      mode: "reports";
-    }
-  | null;
+/*
+  IMPORTANT:
+  Keep your full RAW_PART_CATALOG block here exactly as it is in your current file.
+  Do not remove any part rows.
+*/
+const RAW_PART_CATALOG = `
+Part_Number	Plasman P/N	Part_Desc
+71510-TYS-A00ZF	612540112	MDX RR SKID GARN WHITE DIAMOND
+71510-TYS-A00ZE	612540256	MDX RR SKID GARN MODERN STEEL
+71510TYSA00ZD	612540532	GARN, RR. *NH830M*
+71510TYSA00ZG	612540611	GARNISH, RR. *B621P*
+71510TYSA00ZB	612540613	GARNISH, RR. *R568P*
+71510-TYS-A00ZC	612540616	MDX RR SKID GARN FATH BLACK
+71110-TYA-A00	613530000	21 MDX SKID GARN FRT BPR SERV
+71110-TYB-A00	617990000	21 MDX SKID FRT ULTRA MIC SERV
+71152-30A-A00	620680000	ACCORD 23 FMC BPR LWR SERV
+71551-30A-A00	620690000	ACCORD 23 FMC BPR RR
+71550-30B-A10	622130570	23 ACCD LWR GARN RR BPR SERV
+04716-TYB-A20ZZ	622270720	21 MDX RR SKID GRN BLK
+04712-TYB-A10ZZ	622280720	21 MDX SKID FRT ULTRA SERV BLK
+74890-T1W-A51	627620000	CRV LPG W/CAM 2015 SERVICE
+74890-T2F-A31	605460000	ACC GARN w/SWI w/CAM SERVICE
+71200-3D4-A31	617830000	23 CRV WITH 1R1V RDR FHEV SERV
+71106-TJB-A20	617460000	22 RDX GRILLE SERV
+71553-31M-A01	621240000	HONDA ILX 2023 COVER FINISHER
+74890-T1W-A41	617610000	CRV LPG BASE MEXICO SERV
+75312-TP6-A01ZL	603996206	HONDA TP6 FRT LDM RH BASQU RED
+74160-31M-A01ZA	621230570	23 INT HOOD AIR OUTLET BERLINA
+71102-SZN-A00	603962000	ACURA SZN FRONT BUMP LWR SERV
+74902-3A0-A20	616560570	23 CRV PTD LOWER SERVICE
+75333-TP6-A01ZE	604007500	HONDA TP6 RR LDM LH CRY BLACK
+71700-TBJ-A01ZB	610750532	CIVIC SI 2DR SPLR LUNAR SILVER
+71125-T1W-A01	611130	LOWER GRILLE CHROME
+71200-3A0-A31	619140000	23 CRV WITH RADAR BERL BL SERV
+71185-TLA-C50	614801000	20 CRV UPR LH BLK SERV
+71705-TEY-Y01ZK	613990027	CIVIC SI 4DR TURK SPLR SERVICE
+71200-3A0-A11	616410000	23 CRV NO RADAR BERL BLACK SER
+71110TYAA50	622580000	GARNISH, FR.
+74450-TYA-A20	617601570	21 MDX RR WF LH BERL BL SERV
+71700-TK4-A01ZM	603470021	ACURA TL SPLR GRAPHITE LUSTER
+75313-TP6-A01ZE	604008500	HONDA TP6 RR LDM RH CRY BLACK
+74115-TP6-A00ZF	604016115	TP6 LWR FRT GARN RH POL METAL
+71700-TBJ-A01ZE	610750500	CIVIC SI 2DR SPLR CRY BLACK
+71700-TK4-X01ZM	603490021	TL SPOILER GRAPHITE LUSTER MEX
+71180-TLA-A60	613512000	20 CRV UPR RH HEX SERV
+71118-TLA-A50	613785000	20 CRV MLDG SIDE FR LH SERV
+71127-T0G-A01	604620000	HONDA CRV 2012 FRT GARN FRT GR
+71113-TLA-A50	613786000	20 CRV MLDG SIDE FR RH SERV
+71121-TLA-A10	609880000	CRV GRILLE BASE RADAR SERVICE
+71128-T1W-A01	611115	MLDG UPPER LEFT GRILLE/CHRM
+71123-T1W-A01	611110	MLDG UPPER RIGHT GRILLE/CHRM
+71185-TLA-A60	613511000	20 CRV UPR LH HEX SERV
+71113-TLA-A70	614506000	20 CRV LWR RH HEX SERV
+75390-TYA-A01	613648000	21 MDX PROT RR W/ARC RH SERV
+71121-TLA-A00	609840590	CRV GRILLE BASE BLACK SERVICE
+71560-3D4-A01	619200000	23 CRV SKID GARN RR BPR SERV
+71517-TLA-A50	614271000	20 CRV MLDG RR BMP END LH SER
+71129-T1W-A01	607630000	HONDA CRV 2015 STAY FRT GRILLE
+74450-TYA-A00	613621000	21 MDX RR WHL PROT LH SERV
+71128-T0A-A01	604630919	HONDA CRV 2012 STAY FR GR SER
+91504-TJB-A01	686030	RDX 91504TJBAA000 CLIP/SEAL
+71511-TLA-A50	614260000	20 CRV CTR MLDG RR BPR SERV
+71510-TLA-A00	609920000	CRV 2017 RR SKID GRN W/FIN SER
+74115-TYA-A00	613602000	21 MDX FRT WHL PROT RH SERV
+71510-T1W-A11	607540000	CRV 2015 REAR BUMPER LOWER GAR
+71110TYAA60ZD	622590573	GARN, FR. *NH883P*
+74410-TYA-A00	613622000	21 MDX RR WHL PROT RH SERV
+71540-TPG-A50	614552000	20 CRV LWR TOUR RH SERV
+74890-TVA-A11ZJ	610700500	ACC LPG W/CAM CRY BLACK
+71112-TLA-A70	614460000	20 CRV LWR CTR HEX SERV
+71122-TA0-A11	600122	CHR CENT FRT GRL ACC 11 RH
+71125-T0G-A01	600148	MLDG LWR, FR GRILLE/CHROME CRV
+71510-TLA-A10	609930000	CRV 2017 RR SKID GRN SERVICE
+71125-TA0-A11	600125	CHR UPPER FRT GRL ACC 11 RH
+71112-TLA-A50	613760000	20 CRV MLDG CTR BPR, MIC SERV
+71545-TPG-A50	614551000	20 CRV LWR TOUR LH SERV
+71110TYAA60ZA	622590613	GARNISH, FR. *R568P*
+71102-TVA-F00	617166000	HONDA ACC FRT FOG COVER RH
+71122-TLA-A60	613430570	20 CRV FRT GRILL GARN BLK SERV
+71127-TA0-A11	600121	CHR CENT FRT GRL ACC 11 LH
+75395-TYA-A01	613647000	21 MDX PROT RR W/ARC LH SERV
+71107-SZA-A00ZZ	603181000	HONDA PILOT CV FRT FOG LIG LH
+74890-TVA-A11ZM	610700699	18 ACC LPG W/CAM SONIC GREY
+71520-TLE-R00	610980000	CRV 2017 RR BUMPR NO FIN SERV
+71103-STK-A01	604152506	ACURA STK R FR FOG - GLTR SLVR
+71126-T0G-A01	604610000	HONDA CRV 2012 FRT EMBLEM
+71122-T0G-A01	600145	MLDG UPR, FR GRILLE/CHROME CRV
+74890-T2F-A11	605440000	ACC LIC GARN w/CAM SERVICE
+74890-T2G-A11	608500000	2016 ACC LIC GARN W/CAM
+71203-TZ3-A00	610891000	TLX BLOCKER FRT GRL LH HONDA
+74890-TVA-A11ZF	610700532	ACC LPG W/CAM LUNAR SILVER
+71110TYAA60ZB	622590616	GARN, FR. *NH893P*
+71105-TYS-A00	612530570	MDX GARN FRT BMP BERL BLK SERV
+74890-T1W-A71	607600000	CRV LPG W/CAM 2015 SERVICE
+71121-T0G-A01ZA	604600203	CRV GRILL ASSY FRT-ELP
+74890-T20-A11	614290000	22 CIVIC LPG W/ CAM/SWTCH SERV
+71118-TLA-C50	614525000	20 CRV LWR LH BLK SERV
+71711-TEY-Y01	606900	2016 CIVIC SI SEAL KIT
+74890-TBA-A11ZG	607930533	CVC 2016 LPG W/CAM DRK BLUE
+74115-TYA-A20	617592570	21 MDX FRT WF RH BERL BL SERV
+71102-STX-A00	604102000	MDX 2010 MESH FRT BUMPER LW RH
+74890-TBA-A11ZM	607930573	CVC 2016 LPG W/CAM PLATNM WHIT
+71160-3D4-A01	619210000	23 CRV SKID GARN FRT BPR SERV
+71102-SZA-A00ZZ	603182000	HONDA PILOT CV FRT FOG LIG RH
+71124-TLA-A50	613450000	20 CRV GRL RDR COVER SERV
+74890-TBA-A11ZB	607930532	CVC 2016 LPG W/CAM LUN SILVER
+74890-TBA-A11ZC	607930256	CVC 2016 LPG W/CAM MOD STEEL
+71180-TLA-C50	614802000	20 CRV UPR RH BLK SERV
+75150-SVA-A00	601690919	SVAA 2 DR FRT GRILLE CVR SERV.
+74890-TVA-A11ZG	610700256	ACC LPG W/CAM MOD STEEL
+74890-TBA-A11ZA	607930535	CVC 2016 LPG W/CAM BRG BLACK
+71206-TZ3-A00	610891000	TLX BLOCKER FRT GRL LH HONDA
+74890-TWA-A01ZC	618030573	21 ACC LPG BLUE H PLATINUM WH
+71124-TE0-A11	604410919	HONDA ACCORD 2 DR GRL 2011 SER
+75660-TJB-A01	611881570	RDX D-PILL LH BER BLACK SERVIC
+71510-TYB-A00	614150000	21 MDX SKID RR ULTRA MIC SERV
+74890-TWA-A01ZD	618030699	21 ACC LPG BLUE H SONIC GREY
+74165-TYA-A20	617591570	21 MDX FRT WF LH BERL BL SERV
+71126-TA5-A00	600051	CHROME SURR71126-TA0A-A001 SER
+71103-TJB-A20	617442000	22 RDX INTAKE GARN RH MIC SERV
+71181-TGV-A00ZH	613150256	21TLX UPR FRT BMPR M STEEL
+71180-TLC-R50	614102000	20 CRV UPR RH TRI SERV
+74890-TBA-A11ZJ	607930536	CVC 2016 LPG W/CAM RALLY RED
+71124-TA0-A11	600124	CHR LOWER FRT GRL ACC 11 RH
+71187-TYB-A00	617021000	21 MDX ULTRA FRT BPR LH SERV
+71201-TZ3-A00	610892000	TLX BLOCKER FRT GRL RH HONDA
+71110TYBA50	622600000	25 MDX SKID FRT ULTRA MIC
+71520-TLA-A00	610300000	CRV 2017 RR BUMPR W/FIN SERV
+74890-TBA-A11ZH	607930537	CVC 2016 LPG W/CAM SPORTY BLUE
+74895-TA5-A01ZG	603020115	GARNISH +NH737M+
+74890-TVA-A11ZE	610700573	ACC LPG W/CAM PLATINUM WHITE
+75395-31M-A01ZB	621207613	23 INT RR DOOR W/A LH EXT CRIM
+71181-TGV-A00ZF	613150573	21TLX UPR FRT BMPR PLAT WHT
+74890-TVA-A11ZC	610700379	ACC LPG W/CAM SAN MAR RED
+71200-3A0-A21	619130000	23 CRV WITH RADAR MIC SERV
+71203-3A0-A11	619150000	23 CRV FRT GR SUB PTD SERVICE
+71181-TGV-A50ZA	622290649	24 TLX FRT BUMP GRN TIG EYE
+75610-TJB-A01	611882570	RDX D-PILL RH BER BLACK SERVIC
+71121-TA0-A00	603140919	HONDA 4 DR ACC GRILLE FR BUMPE
+74895-TA5-A01ZD	603020306	GARNISH +NH578+
+71110-T1W-A11	607560000	CRV 2015 LOWER GARNISH FRONT B
+71108-TJB-A20	617441000	22 RDX INTAKE GARN LH MIC SERV
+74890-TVA-A11ZK	610700077	ACC LPG W/CAM OBSID BLUE
+71121-TE0-A01	603040919	HONDA 2 DR ACC GR FR BUMPE SPO
+71512-TLA-A50	614272000	20 CRV MLDG RR BMP END RH SER
+75390-31M-A01ZB	621208613	23 INT RR DOOR W/A RH EXT CRIM
+75395-31M-A01ZA	621207649	23 INT RR DOOR W/A LH TIG EYE
+74890-TBA-A11ZD	607930020	CVC 2016 LPG W/CAM ORC WHITE
+75395-31M-A01ZC	621207616	23 INT RR DOOR W/A LH FAT BLK
+74890-TVA-A11ZL	610700577	ACC LPG W/CAM STILL NIGHT
+74895-TA5-A21ZG	604450115	4DR ACC TRNK NO CAM-P METAL
+75620-TA5-A01	604552000	4DR ACC TRUNK GARN CHROME RH
+74890-TYA-A01ZK	613580255	21MDX RR LPG OBS BLUE SERV
+74890-TYA-A01ZF	613580648	21MDX RR LPG LIQUID CARB SERV
+71703-TBJ-A01	610712000	2016 HONDA SI SPOILER - CVR RH
+75332-TP6-A01ZE	603995500	HONDA TP6 FRT LDM LH CRY BLACK
+71112-SZA-A00ZA	603552901	HONDA PILOT FOGL COVER CAP RH
+74895-TA5-A21ZC	604450306	4DR ACC TRNK NO CAM-T WHITE
+71118-TLC-R50	614515000	20 CRV LWR LH TRI SERV
+71127-TLA-A00	610090000	CRV 2017 STAY SERVICE
+74890-TBA-A11ZF	607930306	CVC 2016 LPG W/CAM TAF WHITE
+71850-TZ3-A01ZD	610601256	TLX SIDE SILL LH MOD STEEL
+90303-TA0-003	675302	NUT GARN M6 - 90303-TA0A-0030
+71800-TZ3-A01ZF	610602500	TLX SIDE SILL RH CRYS BLACK
+71850-TZ3-A01ZF	610601500	TLX SIDE SILL LH CRYS BLACK
+75390-31M-A01ZG	621208611	23 INT RR DOOR W/A RH SIG BLUE
+71700-TK4-A01ZK	603470022	ACURA TL SPOILER FORGED SILVER
+75390-31M-A01ZF	621208532	23 INT RR DOOR W/A RH LUN SIL
+74950-3A0-A01ZB	623850738	23 CRV SPLR MIC LWR URBAN SERV
+71700-TK4-A01ZL	603470020	ACURA TL SPOILER ORCHID WHITE
+74950-3A0-A21ZD	623870573	23 CRV SPLR PTD LWR PLAT W SER
+74950-3A0-A01ZD	623850573	23 CRV SPLR MIC LWR PLAT W SER
+74890-TYA-A01ZG	613580573	21MDX RR LPG PLATNM WHITE SERV
+71181-TGV-A50ZH	622290611	24 TLX FRT BUMP GRN SIG BLUE
+74950-3A0-A01ZA	623850574	23 CRV SPLR MIC LWR CARM R SER
+71125-SNA-A00	601650919	SNAA 4 DR FRT GRILLE CVR SERV.
+74950-3A0-A01ZF	623850500	23 CRV SPLR MIC LWR CRY BL SER
+75395-31M-A01ZD	621207648	23 INT RR DOOR W/A LH LIQ GRA
+75390-31M-A01ZD	621208648	23 INT RR DOOR W/A RH LIQ GRAY
+71700-TBJ-A01ZC	610750256	CIVIC SI 2DR SPLR MOD STEEL
+75390-31M-A01ZC	621208616	23 INT RR DOOR W/A RH FAT BLK
+75312-TP6-A01ZE	603996500	HONDA TP6 FRT LDM RH CRY BLACK
+75313-TP6-A01ZB	604008509	HONDA TP6 RR LDM RH OP SAGE
+74494-T6N-A00	607861407	NSX RR FENDER TAIL GAR LH BLK
+75333-TP6-A01ZD	604007436	HONDA TP6 RR LDM LH AL SILVER
+71800-TZ3-A01ZL	610602616	TLX SIDE SILL RH FATHOM BLACK
+71800-TZ3-A01ZD	610602256	TLX SIDE SILL RH MOD STEEL
+75313-TP6-A01ZC	604008112	HONDA TP6 RR LDM RH WHT DIMND
+74902-3A0-A00	616550000	23 CRV MIC LOWER SERVICE
+74895-TA5-A01ZF	603020436	GARNISH +NH700M+
+71705-TEY-Y01ZH	609610537	CIVIC SI 4DR SPLR SPORTY BLUE
+74895-TA5-A31ZG	604390115	4DR ACC TRNK CAM-POLISHD METAL
+71181-TGV-A50ZD	622290616	24 TLX FRT BUMP GRN FAT BLK
+74890-TYA-A01ZD	613580641	21MDX RR LPG MID VIOLET SERV
+74890-TYA-A01ZA	613580649	21MDX RR LPG TIGER EYE SERV
+71700-TE0-A01ZE	603090115	SPOILER +NH737M+
+75313-TP6-A01ZD	604008436	HONDA TP6 RR LDM RH AL SILVER
+75333-TP6-A01ZF	604007115	HONDA TP6 RR LDM LH P METAL
+71700-TK4-A01ZP	603470206	ACURA TL SPOILER BASQUE RED
+74895-TA5-A21ZE	604450436	4DR ACC TRNK NO CAM-AL SILVER
+74165-TP6-A52	605521000	2013 HONDA CROSSTOUR FRT FD LH
+74115-TP6-A52	605522000	2013 HONDA CROSSTOUR FRT FD RH
+71515-TYA-A00	613660000	21 MDX HITCH GARN RR BPR SERV
+71700-TE0-A01ZB	603090304	SPOILER ASSY. +B92P+
+75313-TP6-A01ZK	604008194	HONDA TP6 RR LDM RH TWLGT BLUE
+71700-TE0-A01ZG	603090500	SPOILER NH731P
+71800-TZ3-A01ZC	610602532	TLX SIDE SILL RH LUN SILVER
+71110TYBA60	622610570	25 MDX SKID FRT ULTRA BER BLK
+71700-TE0-A01ZC	603090306	SPOILER +NH578+
+75395-31M-A01ZG	621207611	23 INT RR DOOR W/A LH SIG BLUE
+75332-TP6-A01ZF	603995115	HONDA TP6 FRT LDM LH P METAL
+71104-SZN-A00	603970000	ACURA SZN TOWHOOK CAP SERVICE
+71700-TK4-A01ZE	603470501	SPOILER A+NH736M+
+71510-3S4-A00	617060000	21MDX RR BPR FACE SKID SERVICE
+71850-TZ3-A22ZF	610831573	TLX ROCKER LH PLATINUM WHITE
+71702-TBJ-A01	610732000	2016 HONDA 2 DR FRT STAN RH
+71752-TBJ-A01	610731000	2016 HONDA 2 DR FRT STAN LH
+71700-TE0-A01ZF	603090379	SPOILER, TRUNK +R94+
+74900-SZN-A02	603730407	ACURA SZN SPOILER - BLACK
+74890-TYA-A01ZE	613580616	21MDX RR LPG FATHOM BLACK SERV
+75333-TP6-A51	605757517	CROSS RR LDM LH SILVER SERVICE
+74890-T0G-A11ZA	604650101	CRV RR LIC GARN W/ CAM-SERVICE
+71852-T6N-A02	607821000	NSX SIDE SILL BLADE LH
+74895-TA5-A01ZH	603020113	GARNISH +R530P+
+74895-TA5-A31ZD	604390112	4DR ACC TRNK CAM-WHITE DIAMOND
+74950-3A0-A21ZC	623870736	23 CRV SPLR PTD LWR METEOR SER
+74890-TYA-A01ZH	613580532	21MDX RR LPG LUNAR SILVER SERV
+71800-TZ3-A22ZE	610832577	TLX ROCKER RH STILL NIGHT
+33102-3D4-A01	617946000	23 CRV HEADLIGHT ASSY RH SERV
+33152-3D4-A01	617945000	23 CRV HEADLIGHT ASSY LH SERV
+73162-SZN-A02ZB	603771149	SZN FRT WSHLD LH ASPEN WHITE
+74410-31M-A01ZF	621198532	23 INT RR W/A PROT RH LUN SILV
+74450-31M-A01ZB	621197613	23 INT RR W/A PROT LH EXT CRIM
+74450-31M-A01ZE	621197573	23 INT RR W/A PROT LH PLAT WH
+71700-TK4-A01ZG	603470502	SPOILER A+NH743M+
+75495-T6N-A02	608851407	NSX MIRROR GARN ASSY BLK LH
+74450-31M-A01ZF	621197532	23 INT RR W/A PROT LH LUN SILV
+74410-31M-A01ZE	621198573	23 INT RR W/A PROT RH PLAT WH
+71850-TZ3-A22ZA	610831379	TLX ROCKER LH SAN MAR RED
+74410-31M-A01ZB	621198613	23 INT RR W/A PROT RH EXT CRI
+74450-31M-A01ZA	621197649	23 INT RR W/A PROT LH TIG EYE
+74450-31M-A01ZG	621197611	23 INT RR W/A PROT LH SIG BLUE
+74410-31M-A01ZA	621198649	23 INT RR W/A PROT RH TIG EYE
+74450-31M-A01ZC	621197616	23 INT RR W/A PROT LH FAT BLK
+74410-31M-A01ZD	621198648	23 INT RR W/A PROT RH LIQ GRAY
+74450-31M-A01ZD	621197648	23 INT RR W/A PROT LH LIQ GRAY
+75312-TP6-A01ZF	603996115	HONDA TP6 FRT LDM RH P METAL
+74410-31M-A01ZG	621198611	23 INT RR W/A PROT RH SIG BLUE
+75333-TP6-A01ZA	604007511	HONDA TP6 RR LDM LH GLAC BLUE
+74165-TP6-A00ZQ	604015206	TP6 LWR FRT GARN LH BASQUE RED
+74410-31M-A01ZC	621198616	23 INT RR W/A PROT RH FAT BLK
+75333-TP6-A01ZL	604007206	HONDA TP6 RR LDM LH BASQUE RED
+71705-TEY-Y01ZD	609610256	CIVIC SI 4DR SPLR MODERN STEEL
+74895-TA5-A21ZB	604450002	4DR ACC TRNK NO CAM-SILVR BLUE
+75490-T6N-A01	608852407	NSX MIRROR GARN ASSY BLK RH
+75332-TP6-A01ZB	603995509	HONDA TP6 FRT LDM LH OP SAGE
+75313-TP6-A01ZA	604008511	HONDA TP6 RR LDM RH GLAC BLUE
+73152-SZN-A01ZK	603772207	SZN FRT WSHLD RH ASPEN WHITE
+73162-SZN-A01ZB	603771149	SZN FRT WSHLD LH ASPEN WHITE
+75333-TP6-A01ZK	604007194	HONDA TP6 RR LDM LH TWLGT BLUE
+74115-TP6-A00ZA	604016511	TP6 LWR FRT GARN RH GLAC BLUE
+71150-T95-A01	622510570	24 CALRITY LWR FR BPR SERV
+71802-T6N-A02	607822000	NSX SIDE SILL BLADE RH
+74165-TP6-A00ZD	604015436	TP6 LWR FRT GARN LH A SILVER
+75312-TP6-A01ZC	603996112	HONDA TP6 FRT LDM RH WHT DIMND
+71124-TLA-A00	609890000	CRV GRILLE BASE RADAR DOOR SER
+71515-TYB-A00	614170000	21 MDX RR HITCH GARN MIC SERV
+71850-TZ3-A22ZB	610831256	TLX ROCKER LH MOD STEEL
+71800-TZ3-A22ZF	610832573	TLX ROCKER RH PLATINUM WHITE
+71850-TZ3-A22ZD	610831500	TLX ROCKER LH CRYS BLACK
+75395-31M-A01ZE	621207573	23 INT RR DOOR W/A LH PLAT WH
+71181-TGV-A00ZG	613150532	21TLX UPR FRT BMPR LUN SIL
+71181-TGV-A00ZE	613150616	21TLX UPR FRT BMPR FATH BLK
+71181-TGV-A00ZC	613150613	21TLX UPR FRT BMPR EX CRIMS
+74950-3A0-A01ZH	623850577	23 CRV SPLR MIC LWR STL N SERV
+71102-TYS-A00	612552000	MDX BLACK ED FOG GARN RH SERVC
+71107-TYS-A00	612551000	MDX BLACK ED FOG GARN LH SERVC
+74950-3A0-A01ZC	623850736	23 CRV SPLR MIC LWR METEOR SER
+74165-TYA-A00	613601000	21 MDX FRT WHL PROT LH SERV
+75332-TP6-A01ZC	603995112	HONDA TP6 FRT LDM LH WHT DIMND
+71140-T95-A01	622482570	24 CLARITY FRT GRN RH SERV
+75312-TP6-A52	605746517	CROSS FRT LDM RH SILVER SERVIC
+74895-TA5-A01ZA	603020439	GARNISH +B536P+
+75332-TP6-A52	605745517	CROSS FRT LDM LH SILVER SERVIC
+74890-T2G-A31	608520000	2016 ACC LIC GARN W/CAM+SWI
+74410-TYA-A20	617602570	21 MDX RR WF RH BERL BL SERV
+71113-TLA-C50	614526000	20 CRV LWR RH BLK SERV
+71700-TK4-A01ZD	603470500	SPOILER A+NH731P+
+74895-TA5-A01ZK	603020500	4DR ACC LWR TRUNK SKIN-CRY BLK
+74890-SZN-A01	603700407	SZN RR LIC GARN NO HOLE - BLK
+71117-SZA-A00ZA	603551901	HONDA PILOT FOGL COVER CAP LH
+74895-TA5-A21ZF	604450500	4DR ACC TRNK NO CAM-CRY BLACK
+73162-SZN-A02ZE	603771502	SZN FRT WSHLD LH BURAN SILVER
+74165-TP6-A00ZF	604015115	TP6 LWR FRT GARN LH POL METAL
+71181-TGV-A00ZJ	613150611	21TLX UPR FRT BMPR SIGN BLU
+71190-T95-A01	622481570	24 CLARITY FRT GRN LH SERV
+74890-TBA-A11ZE	607930142	CVC 2016 LPG W/CAM CRY BLACK
+74890-TWA-A01ZJ	618030577	21 ACC LPG BLUE H STILL NIGHT
+71850-TZ3-A01ZH	610601573	TLX SIDE SILL LH PLATINUM WHIT
+74950-3A0-A01ZG	623850737	23 CRV SPLR MIC LWR CAN RI SER
+74895-TA5-A21ZM	604450020	4DR ACC TRNK NO CAM-ORCHID WHT
+74890-T20-A21	617490000	22 CIVIC LPG W/CAM W/O SW SERV
+74115-TP6-A00ZQ	604016206	TP6 LWR FRT GARN RH BASQUE RED
+71200-3A0-A01	616400000	23 CRV NO RADAR MIC SERV
+75390-31M-A01ZE	621208573	23 INT RR DOOR W/A RH PLAT WHI
+74165-TP6-A00ZA	604015511	TP6 LWR FRT GARN LH GLAC BLUE
+75313-TP6-A01ZF	604008115	HONDA TP6 RR LDM RH P METAL
+75333-TP6-A01ZB	604007509	HONDA TP6 RR LDM LH OP SAGE
+75312-TP6-A01ZD	603996436	HONDA TP6 FRT LDM RH AL SILVER
+71510-TYA-A00	623880000	21 MDX RR SKID W/O KICK SERV
+75670-TA5-A01	604551000	4DR ACC TRUNK GARN CHROME LH
+71112-TLC-R50	614470000	20 CRV LWR CTR TRI SERV
+71107-TVA-F00	617165000	HONDA ACC FRT FOG COVER LH
+71124-T1W-B01	608430000	CRV 2015 LOWER BASE GRILLE HOT
+73162-SZN-A02ZC	603771142	SZN FRT WSHLD LH CRYSTAL BLACK
+75313-TP6-A51	605758517	CROSS RR LDM RH SILVER SERVICE
+74450-TYA-A61ZF	#N/A	#N/A
+71118-TLA-A70	614505000	20 CRV LWR LH HEX SERV
+71110TLAA00	609910000	#N/A
+`;
 
-const demoDisplayParts: DisplayPart[] = [
-  {
-    id: "part-1",
-    externalPartNumber: "921690689H",
-    description: "C1YX-2 SPLR W/CAM BAE-GE",
-    customerPartNumber: "26618535",
-    arNumber: "AR036758",
-    position: "220",
-    colour: "8",
-    fixtureId: "220",
-    lineupId: "lineup-1",
-    sequence: "10",
-    orderQty: "24",
-    packQty: "12",
-  },
-  {
-    id: "part-2",
-    externalPartNumber: "74165-TYA-A50",
-    description: "25 MDX FRT WHL PROTECTOR",
-    customerPartNumber: "74165-TYA-A50",
-    arNumber: "AR041220",
-    position: "110",
-    colour: "1",
-    fixtureId: "110",
-    lineupId: "lineup-2",
-    sequence: "20",
-    orderQty: "26",
-    packQty: "26",
-  },
-  {
-    id: "part-3",
-    externalPartNumber: "70490535",
-    description: "C1YC SPOILER UPPER TRIM",
-    customerPartNumber: "26619021",
-    arNumber: "AR039112",
-    position: "305",
-    colour: "2",
-    fixtureId: "305",
-    lineupId: "lineup-3",
-    sequence: "30",
-    orderQty: "18",
-    packQty: "18",
-  },
-  {
-    id: "part-4",
-    externalPartNumber: "26620001",
-    description: "C1XX LOWER GARNISH BLACK",
-    customerPartNumber: "26620001",
-    arNumber: "AR045500",
-    position: "410",
-    colour: "3",
-    fixtureId: "410",
-    lineupId: "lineup-4",
-    sequence: "40",
-    orderQty: "20",
-    packQty: "18",
-  },
-];
+function buildCatalogFromRaw(raw: string): CatalogPart[] {
+  return raw
+    .trim()
+    .split("\n")
+    .slice(1)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const parts = line.split("\t");
+      const externalPartNumber = (parts[0] || "").trim();
+      const internalNumber = (parts[1] || "#N/A").trim() || "#N/A";
+      const description = parts.slice(2).join(" ").trim() || "#N/A";
 
-export default function App() {
-  const [screen, setScreen] = useState<AppScreen>("login");
-  const [employeeId, setEmployeeId] = useState("");
-  const [crewSize, setCrewSize] = useState("1");
-  const [highlightedLineupId, setHighlightedLineupId] = useState("");
-  const [selectedLineupId, setSelectedLineupId] = useState("");
-  const [machineMessage, setMachineMessage] = useState("System ready.");
-  const [showLineupList, setShowLineupList] = useState(false);
+      return {
+        externalPartNumber,
+        internalNumber,
+        description,
+      };
+    })
+    .filter((item) => item.externalPartNumber);
+}
 
-  const [stationConfig, setStationConfig] = useState<StationConfigData>({
-    stationId: "WP3-0031",
-    hmiCellCode: "WP3 - WP3-0031",
-    hmiTitle: "WP3 - WP3-0031",
-    version: "v 3.1.2.273",
+const PART_CATALOG: CatalogPart[] = buildCatalogFromRaw(RAW_PART_CATALOG);
+
+function normalizeCatalogKey(value: string) {
+  return String(value || "")
+    .toUpperCase()
+    .replace(/\s+/g, "")
+    .replace(/-/g, "")
+    .replace(/[()]/g, "0")
+    .replace(/O/g, "0")
+    .replace(/I/g, "1")
+    .replace(/L/g, "1")
+    .trim();
+}
+
+function normalizeScanValue(value: string) {
+  return String(value || "").toUpperCase().replace(/\s+/g, "").trim();
+}
+
+function tryExtractPartNumber(rawValue: string) {
+  return String(rawValue || "")
+    .toUpperCase()
+    .replace(/\s+/g, "")
+    .replace(/\)/g, "0")
+    .replace(/\(/g, "0")
+    .replace(/O/g, "0")
+    .replace(/I/g, "1")
+    .replace(/L/g, "1")
+    .trim();
+}
+
+function findCatalogPartByLabelScan(rawValue: string) {
+  const extracted = tryExtractPartNumber(rawValue);
+  const normalizedExtracted = normalizeCatalogKey(extracted);
+
+  const exactMatch = PART_CATALOG.find(
+    (item) => normalizeCatalogKey(item.externalPartNumber) === normalizedExtracted
+  );
+
+  if (exactMatch) return exactMatch;
+
+  const containedMatch = PART_CATALOG.find((item) => {
+    const catalogKey = normalizeCatalogKey(item.externalPartNumber);
+    return (
+      normalizedExtracted.includes(catalogKey) ||
+      catalogKey.includes(normalizedExtracted)
+    );
   });
 
-  const [displayParts, setDisplayParts] = useState<DisplayPart[]>([]);
-  const [isLoadingLineup, setIsLoadingLineup] = useState(false);
-
-  const [goodCount, setGoodCount] = useState(0);
-  const [suspectCount] = useState(0);
-  const [packedFgCount, setPackedFgCount] = useState(0);
-  const [containerCount, setContainerCount] = useState(1);
-  const [packedSerials, setPackedSerials] = useState<string[]>([]);
-  const [scanStatus, setScanStatus] = useState<"idle" | "success" | "error">("idle");
-
-  const [activeDowntime, setActiveDowntime] = useState<DowntimeRecord | null>(null);
-
-  const stationId = stationConfig.stationId || "WP3-0031";
-  const hmiCellCode =
-    stationConfig.hmiCellCode || stationConfig.hmiTitle || "WP3 - WP3-0031";
-  const hmiVersion = stationConfig.version || "v 3.1.2.273";
-
-  const highlightedPart = useMemo(
-    () => displayParts.find((part) => part.lineupId === highlightedLineupId) ?? null,
-    [displayParts, highlightedLineupId]
-  );
-
-  const selectedPart = useMemo(
-    () => displayParts.find((part) => part.lineupId === selectedLineupId) ?? null,
-    [displayParts, selectedLineupId]
-  );
-
-  const scheduledQtyNumber = Number(selectedPart?.orderQty || 0);
-  const packQtyNumber = Number(selectedPart?.packQty || 0);
-
-  const resetProductionState = () => {
-    setGoodCount(0);
-    setPackedFgCount(0);
-    setContainerCount(1);
-    setPackedSerials([]);
-    setScanStatus("idle");
-  };
-
-  const loadStationData = async () => {
-    setIsLoadingLineup(true);
-
-    try {
-      const [configResponse, lineupResponse] = await Promise.all([
-        getStationConfig(),
-        getStationLineup(),
-      ]);
-
-      if (configResponse?.ok && configResponse?.data) {
-        setStationConfig({
-          stationId: configResponse.data.stationId || "WP3-0031",
-          hmiCellCode:
-            configResponse.data.hmiCellCode ||
-            configResponse.data.hmiTitle ||
-            "WP3 - WP3-0031",
-          hmiTitle:
-            configResponse.data.hmiTitle ||
-            configResponse.data.hmiCellCode ||
-            "WP3 - WP3-0031",
-          version: configResponse.data.version || "v 3.1.2.273",
-        });
-      }
-
-      const rawItems = lineupResponse?.data?.items;
-
-      if (Array.isArray(rawItems)) {
-        const mappedParts: DisplayPart[] = rawItems.map((item: SchedulerLineupItem) => ({
-          ...item.part,
-          lineupId: item.lineupId,
-          sequence: item.sequence,
-          orderQty: item.orderQty,
-          packQty: item.packQty,
-        }));
-
-        setDisplayParts(mappedParts);
-      } else {
-        setDisplayParts([]);
-      }
-    } catch (error) {
-      console.error("Station data load failed:", error);
-      setStationConfig({
-        stationId: "WP3-0031",
-        hmiCellCode: "WP3 - WP3-0031",
-        hmiTitle: "WP3 - WP3-0031",
-        version: "v 3.1.2.273",
-      });
-      setDisplayParts(demoDisplayParts);
-      setMachineMessage("Demo mode line-up loaded. Backend is not reachable.");
-    } finally {
-      setIsLoadingLineup(false);
-    }
-  };
-
-  const handleLogin = async () => {
-    if (!employeeId.trim() || !crewSize.trim()) {
-      setMachineMessage("Please enter Employee ID and Crew Size.");
-      return;
-    }
-
-    try {
-      const result = await loginOperator({
-        employeeId: employeeId.trim(),
-        crewSize: Number(crewSize),
-      });
-
-      setEmployeeId(result.data.employeeId);
-      setCrewSize(String(result.data.crewSize));
-      setShowLineupList(false);
-      setHighlightedLineupId("");
-      setSelectedLineupId("");
-      resetProductionState();
-      setMachineMessage(result.message || "Login successful.");
-      setScreen("partMenu");
-    } catch (error: unknown) {
-      const isNetworkError =
-        typeof error === "object" &&
-        error !== null &&
-        "message" in error &&
-        typeof (error as { message?: string }).message === "string" &&
-        (error as { message: string }).message.toLowerCase().includes("network");
-
-      if (isNetworkError) {
-        setEmployeeId(employeeId.trim());
-        setCrewSize(String(Number(crewSize)));
-        setShowLineupList(false);
-        setHighlightedLineupId("");
-        setSelectedLineupId("");
-        resetProductionState();
-        setMachineMessage("Demo mode login active. Backend is not reachable.");
-        setScreen("partMenu");
-        return;
-      }
-
-      console.error("Login failed:", error);
-      setMachineMessage("Login failed. Please check the form and try again.");
-    }
-  };
-
-  const handleLoginFormLogout = () => {
-    setEmployeeId("");
-    setCrewSize("1");
-    setHighlightedLineupId("");
-    setSelectedLineupId("");
-    setShowLineupList(false);
-    setDisplayParts([]);
-    resetProductionState();
-    setMachineMessage("Login form cleared.");
-  };
-
-  const handleLoginFormExit = () => {
-    window.close();
-    setMachineMessage("Window close requested.");
-  };
-
-  const handleDisplayPart = async () => {
-    setShowLineupList(true);
-    setMachineMessage("Loading scheduler line-up...");
-    await loadStationData();
-  };
-
-  const handleHighlightPart = (lineupId: string) => {
-    const nextPart = displayParts.find((part) => part.lineupId === lineupId) ?? null;
-    setHighlightedLineupId(lineupId);
-
-    if (nextPart) {
-      setMachineMessage(`Part highlighted: ${nextPart.externalPartNumber}`);
-    }
-  };
-
-  const handleSelectPart = () => {
-    if (!highlightedLineupId) {
-      setMachineMessage("Please choose a part from the line-up first.");
-      return;
-    }
-
-    const nextPart = displayParts.find((part) => part.lineupId === highlightedLineupId) ?? null;
-
-    if (!nextPart) {
-      setMachineMessage("Selected part could not be loaded.");
-      return;
-    }
-
-    setSelectedLineupId(highlightedLineupId);
-    resetProductionState();
-    setMachineMessage(`Part loaded into HMI: ${nextPart.externalPartNumber}`);
-    setScreen("hmi");
-  };
-
-  const handleChangePart = () => {
-    setShowLineupList(false);
-    setHighlightedLineupId("");
-    setSelectedLineupId("");
-    resetProductionState();
-    setMachineMessage("Change Part requested.");
-    setScreen("partMenu");
-  };
-
-  const handleLogout = () => {
-    setEmployeeId("");
-    setCrewSize("1");
-    setHighlightedLineupId("");
-    setSelectedLineupId("");
-    setShowLineupList(false);
-    setDisplayParts([]);
-    resetProductionState();
-    setMachineMessage("Operator logged out.");
-    setScreen("login");
-  };
-
-  const handleExitPartMenu = () => {
-    setShowLineupList(false);
-    setHighlightedLineupId("");
-    setSelectedLineupId("");
-    setMachineMessage("Part menu closed.");
-    setScreen("login");
-  };
-
-  const handleSimulateValidScan = () => {
-    if (!selectedPart) {
-      setMachineMessage("No active part selected.");
-      setScanStatus("error");
-      return;
-    }
-
-    if (!selectedPart.orderQty) {
-      setMachineMessage("Scheduler must enter Order Qty first.");
-      setScanStatus("error");
-      return;
-    }
-
-    if (scheduledQtyNumber > 0 && goodCount >= scheduledQtyNumber) {
-      setMachineMessage("Scheduled target already reached.");
-      setScanStatus("error");
-      return;
-    }
-
-    const nextGood = goodCount + 1;
-    const nextPackedFg = packedFgCount + 1;
-
-    setGoodCount(nextGood);
-    setPackedFgCount(nextPackedFg);
-    setPackedSerials((prev) => [...prev, `SCAN-${String(nextGood).padStart(4, "0")}`]);
-    setScanStatus("success");
-
-    if (packQtyNumber > 0 && nextPackedFg > 0 && nextPackedFg % packQtyNumber === 0) {
-      setContainerCount((prev) => prev + 1);
-      setMachineMessage("Scan accepted. Pack complete for current container.");
-      return;
-    }
-
-    if (scheduledQtyNumber > 0 && nextGood === scheduledQtyNumber) {
-      setMachineMessage("Scan accepted. Scheduled target reached.");
-      return;
-    }
-
-    setMachineMessage("Scan accepted.");
-  };
-
-  const handleOpenDowntime = () => {
-    setMachineMessage("Downtime screen opened.");
-    setScreen("downtime");
-  };
-
-  const handleStartDowntime = (category: string, reason: string, notes: string) => {
-    setActiveDowntime({
-      category,
-      reason,
-      notes,
-      startedAt: Date.now(),
-    });
-    setMachineMessage(`Downtime active: ${category} / ${reason}`);
-  };
-
-  const handleResumeFromDowntime = () => {
-    if (activeDowntime) {
-      setActiveDowntime({
-        ...activeDowntime,
-        endedAt: Date.now(),
-      });
-    }
-
-    setMachineMessage("Downtime closed. Returned to HMI.");
-    setScreen("hmi");
-  };
-
-  return (
-    <main
-      style={{
-        ...mainShellStyle,
-        alignItems: screen === "login" ? "center" : "flex-start",
-      }}
-    >
-      <style>{responsiveCss}</style>
-
-      {screen === "login" && (
-        <LoginScreen
-          stationId={stationId}
-          employeeId={employeeId}
-          crewSize={crewSize}
-          onEmployeeIdChange={setEmployeeId}
-          onCrewSizeChange={setCrewSize}
-          onLogin={handleLogin}
-          onLogout={handleLoginFormLogout}
-          onExit={handleLoginFormExit}
-        />
-      )}
-
-      {screen === "partMenu" && (
-        <PartMenuScreen
-          stationId={stationId}
-          employeeId={employeeId}
-          crewSize={crewSize}
-          parts={displayParts}
-          showLineupList={showLineupList}
-          highlightedPart={highlightedPart}
-          highlightedLineupId={highlightedLineupId}
-          isLoadingLineup={isLoadingLineup}
-          onDisplayPart={handleDisplayPart}
-          onHighlightPart={handleHighlightPart}
-          onSelectPart={handleSelectPart}
-          onExit={handleExitPartMenu}
-        />
-      )}
-
-      {screen === "hmi" && selectedPart && (
-        <PinchZoomStage>
-          <HmiScreen
-            hmiCellCode={hmiCellCode}
-            hmiVersion={hmiVersion}
-            stationId={stationId}
-            employeeId={employeeId}
-            crewSize={crewSize}
-            part={selectedPart}
-            lineupParts={displayParts}
-            machineMessage={machineMessage}
-            goodCount={goodCount}
-            suspectCount={suspectCount}
-            packedFgCount={packedFgCount}
-            containerCount={containerCount}
-            packedSerials={packedSerials}
-            scanStatus={scanStatus}
-            onScanOk={handleSimulateValidScan}
-            onChangePart={handleChangePart}
-            onLogout={handleLogout}
-            onOpenDowntime={handleOpenDowntime}
-            onSetMachineMessage={setMachineMessage}
-          />
-        </PinchZoomStage>
-      )}
-
-      {screen === "downtime" && (
-        <PinchZoomStage>
-          <DowntimeScreen
-            hmiCellCode={hmiCellCode}
-            activeDowntime={activeDowntime}
-            onStartDowntime={handleStartDowntime}
-            onResume={handleResumeFromDowntime}
-          />
-        </PinchZoomStage>
-      )}
-    </main>
-  );
+  return containedMatch || null;
 }
 
-function PinchZoomStage({ children }: { children: React.ReactNode }) {
-  const [scale, setScale] = useState(1);
-  const [isMobileViewport, setIsMobileViewport] = useState(false);
-  const pinchStateRef = useRef<{
-    startDistance: number;
-    startScale: number;
-  } | null>(null);
-
-  useEffect(() => {
-    const updateViewport = () => {
-      setIsMobileViewport(window.innerWidth <= 900);
-    };
-
-    updateViewport();
-    window.addEventListener("resize", updateViewport);
-    return () => window.removeEventListener("resize", updateViewport);
-  }, []);
-
-  useEffect(() => {
-    if (isMobileViewport) {
-      setScale(1);
-      pinchStateRef.current = null;
-    }
-  }, [isMobileViewport]);
-
-  const clampScale = (value: number) => {
-    return Math.min(1.15, Math.max(0.7, value));
-  };
-
-  const getTouchDistance = (touches: React.TouchList) => {
-    if (touches.length < 2) return 0;
-
-    const first = touches[0];
-    const second = touches[1];
-
-    const dx = second.clientX - first.clientX;
-    const dy = second.clientY - first.clientY;
-
-    return Math.sqrt(dx * dx + dy * dy);
-  };
-
-  const handleTouchStart = (event: React.TouchEvent<HTMLDivElement>) => {
-    if (isMobileViewport) return;
-
-    if (event.touches.length === 2) {
-      pinchStateRef.current = {
-        startDistance: getTouchDistance(event.touches),
-        startScale: scale,
-      };
-    }
-  };
-
-  const handleTouchMove = (event: React.TouchEvent<HTMLDivElement>) => {
-    if (isMobileViewport) return;
-    if (event.touches.length !== 2 || !pinchStateRef.current) return;
-
-    event.preventDefault();
-
-    const currentDistance = getTouchDistance(event.touches);
-
-    if (currentDistance <= 0) return;
-
-    const nextScale =
-      pinchStateRef.current.startScale *
-      (currentDistance / pinchStateRef.current.startDistance);
-
-    setScale(clampScale(nextScale));
-  };
-
-  const handleTouchEnd = (event: React.TouchEvent<HTMLDivElement>) => {
-    if (isMobileViewport) return;
-
-    if (event.touches.length < 2) {
-      pinchStateRef.current = null;
-    }
-  };
-
-  return (
-    <div
-      style={{
-        ...pinchStageViewportStyle,
-        touchAction: isMobileViewport ? "pan-y" : "none",
-      }}
-      onTouchStart={handleTouchStart}
-      onTouchMove={handleTouchMove}
-      onTouchEnd={handleTouchEnd}
-    >
-      <div
-        style={{
-          ...pinchStageContentStyle,
-          transform: isMobileViewport ? "none" : `scale(${scale})`,
-          transition: isMobileViewport ? "none" : pinchStageContentStyle.transition,
-          width: "100%",
-        }}
-      >
-        {children}
-      </div>
-    </div>
-  );
-}
-
-function LoginScreen({
-  stationId,
-  employeeId,
-  crewSize,
-  onEmployeeIdChange,
-  onCrewSizeChange,
-  onLogin,
-  onLogout,
-  onExit,
-}: {
-  stationId: string;
-  employeeId: string;
-  crewSize: string;
-  onEmployeeIdChange: (value: string) => void;
-  onCrewSizeChange: (value: string) => void;
-  onLogin: () => void;
-  onLogout: () => void;
-  onExit: () => void;
-}) {
-  return (
-    <section style={loginCardStyle}>
-      <div style={loginHeaderStyle}>
-        <div style={loginTitleStyle}>OPERATOR LOGIN</div>
-        <div style={loginSubTitleStyle}>Station authentication required</div>
-      </div>
-
-      <div style={loginPanelStyle}>
-        <div className="login-grid" style={loginGridStyle}>
-          <label style={loginLabelStyle}>STATION ID</label>
-          <input value={stationId} readOnly style={inputStyle} />
-
-          <label style={loginLabelStyle}>EMPLOYEE ID</label>
-          <input
-            value={employeeId}
-            onChange={(e) => onEmployeeIdChange(e.target.value)}
-            style={inputStyle}
-            placeholder="Enter employee number"
-          />
-
-          <label style={loginLabelStyle}>CREW SIZE</label>
-          <select
-            value={crewSize}
-            onChange={(e) => onCrewSizeChange(e.target.value)}
-            style={inputStyle}
-          >
-            {Array.from({ length: 15 }, (_, i) => String(i + 1)).map((value) => (
-              <option key={value} value={value}>
-                {value}
-              </option>
-            ))}
-          </select>
-        </div>
-
-        <div className="login-buttons-row" style={loginButtonsRowStyle}>
-          <button style={greenLoginButtonStyle} onClick={onLogin}>
-            LOG IN
-          </button>
-          <button style={redLoginButtonStyle} onClick={onLogout}>
-            LOG OUT
-          </button>
-          <button style={grayLoginButtonStyle} onClick={onExit}>
-            EXIT
-          </button>
-        </div>
-      </div>
-    </section>
-  );
-}
-
-function PartMenuScreen({
-  stationId,
-  employeeId,
-  crewSize,
-  parts,
-  showLineupList,
-  highlightedPart,
-  highlightedLineupId,
-  isLoadingLineup,
-  onDisplayPart,
-  onHighlightPart,
-  onSelectPart,
-  onExit,
-}: {
-  stationId: string;
-  employeeId: string;
-  crewSize: string;
-  parts: DisplayPart[];
-  showLineupList: boolean;
-  highlightedPart: DisplayPart | null;
-  highlightedLineupId: string;
-  isLoadingLineup: boolean;
-  onDisplayPart: () => void;
-  onHighlightPart: (lineupId: string) => void;
-  onSelectPart: () => void;
-  onExit: () => void;
-}) {
-  return (
-    <section style={menuPageWrapStyle}>
-      <div style={menuTopMetaStyle}>
-        <span>STATION: {stationId}</span>
-        <span>EMPLOYEE ID: {employeeId || "-"}</span>
-        <span>CREW SIZE: {crewSize || "-"}</span>
-      </div>
-
-      <div style={whiteMenuBoxStyle}>
-        <div style={whiteMenuTitleStyle}>PART MENU</div>
-
-        <div style={largeWhitePanelStyle}>
-          {showLineupList ? (
-            <div style={lineupSectionStyle}>
-              <div style={lineupHeaderRowStyle}>
-                <div style={lineupSectionTitleStyle}>DISPLAY PART</div>
-                <div style={lineupHintStyle}>
-                  Highlight one scheduled item, then press SELECT PART.
-                </div>
-              </div>
-
-              {isLoadingLineup ? (
-                <div style={emptyPanelMessageStyle}>Loading scheduler line-up...</div>
-              ) : (
-                <div className="lineup-content-wrap" style={lineupContentWrapStyle}>
-                  <div style={lineupListStyle}>
-                    {parts.map((part) => {
-                      const isHighlighted = part.lineupId === highlightedLineupId;
-
-                      return (
-                        <button
-                          key={part.lineupId}
-                          onClick={() => onHighlightPart(part.lineupId)}
-                          style={{
-                            ...lineupItemStyle,
-                            background: isHighlighted ? "#1d4ed8" : "#f8fafc",
-                            color: isHighlighted ? "#ffffff" : "#111827",
-                            border: isHighlighted ? "3px solid #16a34a" : "2px solid #cbd5e1",
-                          }}
-                        >
-                          <div className="lineup-top-row" style={lineupTopRowStyle}>
-                            <span style={lineupMainCodeStyle}>{part.externalPartNumber}</span>
-                            <span style={lineupSeqStyle}>SEQ {part.sequence || "-"}</span>
-                          </div>
-
-                          <div style={lineupDescriptionStyle}>{part.description}</div>
-
-                          <div style={lineupMetaGridStyle}>
-                            <LineMeta label="ORDER QTY" value={part.orderQty || "-"} />
-                            <LineMeta label="PACK QTY" value={part.packQty || "-"} />
-                          </div>
-                        </button>
-                      );
-                    })}
-                  </div>
-
-                  <div style={selectedPreviewBoxStyle}>
-                    <div style={selectedPreviewTitleStyle}>PART DETAILS</div>
-                    <PreviewRow
-                      label="External Part #"
-                      value={highlightedPart?.externalPartNumber ?? ""}
-                    />
-                    <PreviewRow label="Description" value={highlightedPart?.description ?? ""} />
-                    <PreviewRow
-                      label="Customer Part #"
-                      value={highlightedPart?.customerPartNumber ?? ""}
-                    />
-                    <PreviewRow label="AR #" value={highlightedPart?.arNumber ?? ""} />
-                    <PreviewRow label="Position" value={highlightedPart?.position ?? ""} />
-                    <PreviewRow label="Colour" value={highlightedPart?.colour ?? ""} />
-                    <PreviewRow label="Order Qty" value={highlightedPart?.orderQty ?? ""} />
-                    <PreviewRow label="Pack Qty" value={highlightedPart?.packQty ?? ""} />
-                  </div>
-                </div>
-              )}
-            </div>
-          ) : (
-            <div style={emptyPanelMessageStyle}>
-              Press <strong>DISPLAY PART</strong> to load scheduler line-up inside this panel.
-            </div>
-          )}
-        </div>
-
-        <div className="partmenu-buttons-row" style={bottomButtonsWrapStyle}>
-          <button style={displayButtonStyle} onClick={onDisplayPart}>
-            DISPLAY PART
-          </button>
-          <button style={selectButtonStyle} onClick={onSelectPart}>
-            SELECT PART
-          </button>
-          <button style={exitButtonStyle} onClick={onExit}>
-            EXIT
-          </button>
-        </div>
-      </div>
-    </section>
-  );
-}
-
-function HmiScreen({
-  hmiCellCode,
-  hmiVersion,
-  stationId,
-  employeeId,
-  crewSize,
-  part,
-  lineupParts,
-  machineMessage,
-  goodCount,
-  suspectCount,
-  packedFgCount,
-  containerCount,
-  packedSerials,
-  scanStatus,
-  onScanOk,
-  onChangePart,
-  onLogout,
-  onOpenDowntime,
-  onSetMachineMessage,
-}: {
-  hmiCellCode: string;
-  hmiVersion: string;
-  stationId: string;
-  employeeId: string;
-  crewSize: string;
-  part: DisplayPart;
-  lineupParts: DisplayPart[];
-  machineMessage: string;
-  goodCount: number;
-  suspectCount: number;
-  packedFgCount: number;
-  containerCount: number;
-  packedSerials: string[];
-  scanStatus: "idle" | "success" | "error";
-  onScanOk: () => void;
-  onChangePart: () => void;
-  onLogout: () => void;
-  onOpenDowntime: () => void;
-  onSetMachineMessage: (message: string) => void;
-}) {
-  const [now, setNow] = useState(new Date());
-  const [modalState, setModalState] = useState<ActionModalState>(null);
-
-  useEffect(() => {
-    const timer = window.setInterval(() => {
-      setNow(new Date());
-    }, 1000);
-
-    return () => window.clearInterval(timer);
-  }, []);
-
-  const scanIndicatorColor =
-    scanStatus === "success" ? "#22c55e" : scanStatus === "error" ? "#ef4444" : "#f3f4f6";
-
-  const shiftInfo = getShiftInfo(now);
-  const dateText = formatUiDate(now);
-  const timeText = formatUiTime(now);
-
-  const sortedLineup = useMemo(() => {
-    return [...lineupParts].sort((a, b) => Number(a.sequence || 0) - Number(b.sequence || 0));
-  }, [lineupParts]);
-
-  const footerItems = [
-    { label: "DATE", value: dateText },
-    { label: "TIME", value: timeText },
-    { label: "SHIFT", value: shiftInfo.displayText },
-    { label: "CREW SIZE", value: crewSize || "-" },
-    { label: "EMPLOYEE ID", value: employeeId || "-" },
-    { label: "STATION", value: stationId || "-" },
-    { label: "SEQUENCE", value: part.sequence || "-" },
-    { label: "PART #", value: part.externalPartNumber || "-" },
-  ];
-
-  const openTopAction = (kind: TopActionKind) => {
-    if (kind === "reports") {
-      setModalState({ mode: "reports" });
-      onSetMachineMessage("Daily line-up report opened.");
-      return;
-    }
-
-    setModalState({
-      mode: "action",
-      kind,
-      detail: "",
-    });
-    onSetMachineMessage(`${getActionLabel(kind)} window opened.`);
-  };
-
-  const closeModal = () => {
-    setModalState(null);
-    onSetMachineMessage("Action window closed.");
-  };
-
-  const updateModalDetail = (value: string) => {
-    setModalState((current) => {
-      if (!current || current.mode !== "action") return current;
-      return {
-        ...current,
-        detail: value,
-      };
-    });
-  };
-
-  const submitModal = () => {
-    if (!modalState || modalState.mode !== "action") return;
-
-    const detail = modalState.detail.trim();
-
-    if (!detail) {
-      onSetMachineMessage("Please enter details before submit.");
-      return;
-    }
-
-    onSetMachineMessage(`${getActionLabel(modalState.kind)} submitted: ${detail}`);
-    setModalState(null);
-  };
-
-  return (
-    <section style={hmiSectionStyle}>
-      <div className="hmi-top-header" style={hmiTopHeaderStyle}>
-        <div>
-          <div className="hmi-title" style={hmiTitleStyle}>
-            {hmiCellCode}
-          </div>
-          <div style={{ fontSize: 12, color: "#e5e7eb", fontWeight: 700 }}>{hmiVersion}</div>
-        </div>
-
-        <div className="top-icon-bar" style={iconBarStyle}>
-          <TopActionIcon
-            kind="supervisor"
-            label="SUPERVSR"
-            onPress={() => openTopAction("supervisor")}
-          />
-          <TopActionIcon
-            kind="material"
-            label="MATERIAL"
-            onPress={() => openTopAction("material")}
-          />
-          <TopActionIcon
-            kind="quality"
-            label="QUALITY"
-            onPress={() => openTopAction("quality")}
-          />
-          <TopActionIcon kind="maint" label="MAINT" onPress={() => openTopAction("maint")} />
-          <TopActionIcon
-            kind="workinst"
-            label="WORK INST"
-            onPress={() => openTopAction("workinst")}
-          />
-          <TopActionIcon
-            kind="reports"
-            label="REPORTS"
-            onPress={() => openTopAction("reports")}
-          />
-        </div>
-      </div>
-
-      <div style={topInfoWrap}>
-        <div style={{ marginBottom: 4, fontSize: 12, color: "#d1d5db" }}>
-          EXTERNAL PART INFORMATION
-        </div>
-
-        <div className="external-info-grid" style={externalInfoGridStyle}>
-          <div style={yellowTextSmall}>{part.externalPartNumber}</div>
-          <div style={yellowTextLarge}>{part.description}</div>
-          <div className="fixture-id-box" style={fixtureIdStyle}>
-            Fixture ID: {part.fixtureId}
-          </div>
-        </div>
-
-        <div
-          style={{
-            borderTop: "1px solid #7f8796",
-            marginTop: 4,
-            paddingTop: 4,
-          }}
-        >
-          <div style={{ marginBottom: 4, fontSize: 12, color: "#d1d5db" }}>
-            GENERAL INFORMATION
-          </div>
-
-          <div className="general-info-grid" style={generalInfoGridStyle}>
-            <MiniInfo label="CUST PART #" value={part.customerPartNumber} />
-            <MiniInfo label="AR #" value={part.arNumber} />
-            <MiniInfo label="POSITION" value={part.position} />
-            <MiniInfo label="COLOUR" value={part.colour} />
-
-            <div>
-              <button style={changePackBtn}>CHANGE PACK QTY</button>
-
-              <div
-                style={{
-                  marginTop: 6,
-                  display: "grid",
-                  gridTemplateColumns: "1fr 1fr",
-                  gap: 10,
-                }}
-              >
-                <MiniInfo label="STD PACK" value={part.packQty || ""} accent="#f87171" />
-                <MiniInfo label="ORDER QTY" value={part.orderQty || ""} />
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <div className="hmi-main-grid" style={hmiMainGridStyle}>
-        <div className="hmi-actions-grid" style={hmiActionsGridStyle}>
-          <button style={greenBtn}>PRINT PARTIAL</button>
-          <button style={greenBtn}>SHIFT CHANGE</button>
-          <button style={yellowBtn} onClick={onOpenDowntime}>
-            DOWN TIME
-          </button>
-          <button style={yellowBtn}>SUSPECT / DEFECT</button>
-          <button style={blueBtn}>OPTIONS</button>
-          <button style={redBtn} onClick={onChangePart}>
-            CHANGE PART
-          </button>
-
-          <button style={scanTestBtn} onClick={onScanOk}>
-            SCAN OK
-          </button>
-        </div>
-
-        <div style={panelBox}>
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "1fr 1fr",
-              gap: 0,
-              marginBottom: 6,
-            }}
-          >
-            <CounterHeader title="CONTAINER" />
-            <CounterHeader title="PRODUCTION" />
-          </div>
-
-          <div className="production-panel-grid" style={productionPanelGridStyle}>
-            <div style={containerColumnStyle}>
-              <div
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "1fr 1fr",
-                  gap: 0,
-                }}
-              >
-                <div style={counterLabel}>PACKED</div>
-                <div style={counterLabel}>CONT #</div>
-              </div>
-
-              <div
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "1fr 1fr",
-                  gap: 0,
-                  marginBottom: 0,
-                }}
-              >
-                <div style={counterValue}>{packedFgCount}</div>
-                <div style={counterValue}>{containerCount}</div>
-              </div>
-
-              <div style={serialListBox}>
-                {packedSerials.length === 0 ? (
-                  <div style={emptySerialStyle}>No scans yet.</div>
-                ) : (
-                  packedSerials.map((serial) => (
-                    <div key={serial} style={{ textAlign: "left" }}>
-                      {serial}
-                    </div>
-                  ))
-                )}
-              </div>
-            </div>
-
-            <div style={productionColumnStyle}>
-              <div
-                style={{
-                  width: 66,
-                  height: 48,
-                  background: scanIndicatorColor,
-                  border: "2px solid #9ca3af",
-                  marginBottom: 14,
-                }}
-              />
-
-              <div
-                style={{
-                  color: "#e5e7eb",
-                  fontSize: 16,
-                  fontWeight: 700,
-                  textAlign: "center",
-                  marginBottom: 8,
-                }}
-              >
-                PASS / FAIL
-              </div>
-
-              <div
-                style={{
-                  background: "#f8fafc",
-                  border: "2px solid #9ca3af",
-                  padding: "10px 14px",
-                  color: "#111827",
-                  flex: 1,
-                }}
-              >
-                <MetricRow label="SCHEDULED" value={part.orderQty || ""} color="#111827" />
-                <MetricRow label="PACKED (FG)" value={String(packedFgCount)} color="#111827" />
-                <MetricRow label="GOOD" value={String(goodCount)} color="#16a34a" />
-                <MetricRow label="SUSPECT" value={String(suspectCount)} color="#991b1b" />
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div style={rightPanelStyle}>
-          <div style={rightPanelMetaWrapStyle}>
-            <div style={rightInfoTextStyle}>STATION: {stationId}</div>
-            <div style={rightInfoTextStyle}>EMPLOYEE ID: {employeeId || "-"}</div>
-            <div style={rightInfoTextStyle}>CREW SIZE: {crewSize || "-"}</div>
-            <div style={rightInfoTextStyle}>DATE: {dateText}</div>
-            <div style={rightInfoTextStyle}>TIME: {timeText}</div>
-            <div style={rightInfoTextStyle}>SHIFT: {shiftInfo.displayText}</div>
-          </div>
-
-          <div style={rightPanelSpacerStyle} />
-
-          <div style={rightPanelButtonWrapStyle}>
-            <button style={primaryActionStyle} onClick={onLogout}>
-              LOG OUT
-            </button>
-          </div>
-        </div>
-      </div>
-
-      <div style={messageBarStyle}>{machineMessage}</div>
-
-      <div className="footer-tags-grid" style={footerTagsGridStyle}>
-        {footerItems.map((item) => (
-          <FooterTag key={item.label} label={item.label} value={item.value} />
-        ))}
-      </div>
-
-      {modalState && (
-        <div style={modalOverlayStyle}>
-          <div className="touch-modal-panel" style={modalPanelStyle}>
-            {modalState.mode === "reports" ? (
-              <>
-                <div style={modalTitleStyle}>DAILY LINE-UP REPORT</div>
-
-                <div style={reportMetaStyle}>
-                  <span>DATE: {dateText}</span>
-                  <span>SHIFT: {shiftInfo.displayText}</span>
-                  <span>STATION: {stationId}</span>
-                </div>
-
-                <div style={reportsListStyle}>
-                  {sortedLineup.length === 0 ? (
-                    <div style={reportEmptyStyle}>No line-up loaded yet.</div>
-                  ) : (
-                    sortedLineup.map((item) => {
-                      const isActive = item.lineupId === part.lineupId;
-
-                      return (
-                        <div
-                          key={item.lineupId}
-                          style={{
-                            ...reportRowStyle,
-                            border: isActive ? "2px solid #16a34a" : "1px solid #8b93a3",
-                            background: isActive ? "#455ea6" : "#5a6070",
-                          }}
-                        >
-                          <div style={reportRowTopStyle}>
-                            <span style={reportSeqStyle}>SEQ {item.sequence || "-"}</span>
-                            <span style={reportQtyStyle}>
-                              ORDER {item.orderQty || "-"} / PACK {item.packQty || "-"}
-                            </span>
-                          </div>
-                          <div style={reportPartStyle}>{item.externalPartNumber}</div>
-                          <div style={reportDescStyle}>{item.description}</div>
-                        </div>
-                      );
-                    })
-                  )}
-                </div>
-
-                <div style={modalButtonsRowStyle}>
-                  <button style={modalCancelButtonStyle} onClick={closeModal}>
-                    CLOSE
-                  </button>
-                </div>
-              </>
-            ) : (
-              <>
-                <div style={modalTitleStyle}>{getActionLabel(modalState.kind)}</div>
-
-                <div style={modalMetaInfoStyle}>
-                  <div>STATION: {stationId}</div>
-                  <div>EMPLOYEE ID: {employeeId || "-"}</div>
-                  <div>SHIFT: {shiftInfo.displayText}</div>
-                </div>
-
-                <div style={modalInputLabelStyle}>DETAILS</div>
-
-                <textarea
-                  value={modalState.detail}
-                  onChange={(e) => updateModalDetail(e.target.value)}
-                  style={modalTextareaStyle}
-                  placeholder={`Enter ${getActionLabel(modalState.kind).toLowerCase()} details...`}
-                />
-
-                <div style={modalButtonsRowStyle}>
-                  <button style={modalSubmitButtonStyle} onClick={submitModal}>
-                    SUBMIT
-                  </button>
-                  <button style={modalCancelButtonStyle} onClick={closeModal}>
-                    CANCEL
-                  </button>
-                </div>
-              </>
-            )}
-          </div>
-        </div>
-      )}
-    </section>
-  );
-}
-
-function DowntimeScreen({
-  hmiCellCode,
-  activeDowntime,
-  onStartDowntime,
-  onResume,
-}: {
-  hmiCellCode: string;
-  activeDowntime: DowntimeRecord | null;
-  onStartDowntime: (category: string, reason: string, notes: string) => void;
-  onResume: () => void;
-}) {
-  const [selectedCategory, setSelectedCategory] = useState("DOWNTIME");
-  const [selectedReason, setSelectedReason] = useState("BREAK / LUNCH");
-  const [notes, setNotes] = useState("");
-  const [elapsedSeconds, setElapsedSeconds] = useState(0);
-
-  const categoryOptions: Record<string, string[]> = {
-    MAINTENANCE: [
-      "MAINTENANCE",
-      "COLOR / FAIL GOOD PART",
-      "VALIDATION NOT PASSING",
-      "ROBOT ISSUE",
-      "SENSOR ISSUE",
-      "VISION SYSTEM ISSUE",
-      "ION / FEEDER ISSUE",
-      "TORQUE GUN ISSUE",
-      "WELDER ISSUE",
-    ],
-    DOWNTIME: ["BREAK / LUNCH", "TRAINING", "MEETING", "SAFETY ISSUE"],
-    PROCESS: [
-      "RUNNING SLOW - BU PACK",
-      "WAITING - SUP",
-      "WAITING COMPONENTS",
-      "WAITING PKG WIP",
-      "WAITING PARTS WIP",
-      "WAITING FOR QUALITY",
-      "PART CHANGEOVER",
-      "DNR - PARTS NOT IN SCHED.",
-      "PART QUALITY ISSUE",
-      "LABEL SYS PROBLEMS",
-      "COLOR - FAIL BAD PART",
-    ],
-  };
-
-  useEffect(() => {
-    if (!activeDowntime?.startedAt || activeDowntime.endedAt) {
-      setElapsedSeconds(0);
-      return;
-    }
-
-    setElapsedSeconds(Math.floor((Date.now() - activeDowntime.startedAt) / 1000));
-
-    const timer = window.setInterval(() => {
-      setElapsedSeconds(Math.floor((Date.now() - activeDowntime.startedAt) / 1000));
-    }, 1000);
-
-    return () => window.clearInterval(timer);
-  }, [activeDowntime]);
-
-  const startDowntime = () => {
-    if (!selectedReason) return;
-    onStartDowntime(selectedCategory, selectedReason, notes);
-  };
-
-  const displayTime = formatElapsedTime(elapsedSeconds);
-
-  return (
-    <section style={downtimeScreenShellStyle}>
-      <div style={downtimeScaleSpacerStyle}>
-        <div style={downtimeFrameStyle}>
-          <div style={downtimeYellowHeaderStyle}>
-            <div style={downtimeHeaderTitleStyle}>DOWNTIME</div>
-            <div style={downtimeClockWrapStyle}>
-              <div style={downtimeClockValueStyle}>{displayTime}</div>
-              <div style={downtimeClockMetaStyle}>SECONDS ELAPSED</div>
-            </div>
-          </div>
-
-          <div style={downtimeInnerBodyStyle}>
-            <div className="downtime-column-headers" style={downtimeColumnHeadersStyle}>
-              <div style={downtimeColumnHeaderCellStyle}>MAINTENANCE</div>
-              <div style={downtimeColumnHeaderCellStyle}>DOWNTIME</div>
-              <div style={downtimeColumnHeaderCellStyle}>PROCESS</div>
-            </div>
-
-            <div className="downtime-columns-grid" style={downtimeColumnsGridStyle}>
-              {Object.entries(categoryOptions).map(([category, reasons]) => (
-                <div key={category} style={downtimeListColumnStyle}>
-                  {reasons.map((reason) => {
-                    const isSelected = selectedCategory === category && selectedReason === reason;
-
-                    return (
-                      <button
-                        key={reason}
-                        onClick={() => {
-                          setSelectedCategory(category);
-                          setSelectedReason(reason);
-                        }}
-                        style={{
-                          ...downtimeListButtonStyle,
-                          background: isSelected ? "#2f66da" : "#ffffff",
-                          color: isSelected ? "#ffffff" : "#1f2937",
-                        }}
-                      >
-                        {reason}
-                      </button>
-                    );
-                  })}
-                </div>
-              ))}
-            </div>
-
-            <div style={downtimeExplanationWrapStyle}>
-              <div style={downtimeExplanationTitleStyle}>EXPLANATION / DETAILS</div>
-              <textarea
-                value={notes}
-                onChange={(e) => setNotes(e.target.value)}
-                style={downtimeExplanationInputStyle}
-              />
-            </div>
-
-            <div className="downtime-bottom-bar" style={downtimeBottomBarStyle}>
-              <div style={downtimeIconsWrapStyle}>
-                <DowntimeToolIcon emoji="🛠️" label="Maint" />
-                <DowntimeToolIcon emoji="🚚" label="Supply" />
-                <DowntimeToolIcon emoji="✅" label="Quality" />
-                <DowntimeToolIcon emoji="👥" label="Team" />
-              </div>
-
-              <div style={downtimeActionButtonsWrapStyle}>
-                <button style={downtimeBlueActionStyle}>OPTIONS</button>
-
-                {!activeDowntime?.startedAt || activeDowntime.endedAt ? (
-                  <button style={downtimeStartActionStyle} onClick={startDowntime}>
-                    START
-                  </button>
-                ) : (
-                  <button style={downtimeResumeActionStyle} onClick={onResume}>
-                    RESUME
-                  </button>
-                )}
-              </div>
-            </div>
-
-            <div style={downtimeFooterMetaStyle}>{hmiCellCode}</div>
-          </div>
-        </div>
-      </div>
-    </section>
-  );
-}
-
-function DowntimeToolIcon({ emoji, label }: { emoji: string; label: string }) {
-  return (
-    <button type="button" style={downtimeToolIconButtonStyle}>
-      <div style={downtimeToolIconEmojiStyle}>{emoji}</div>
-      <div style={downtimeToolIconLabelStyle}>{label}</div>
-    </button>
-  );
-}
-
-function LineMeta({ label, value }: { label: string; value: string }) {
-  return (
-    <div style={lineMetaWrapStyle}>
-      <span style={lineMetaLabelStyle}>{label}</span>
-      <span style={lineMetaValueStyle}>{value}</span>
-    </div>
-  );
-}
-
-function TopActionIcon({
-  kind,
-  label,
-  onPress,
-}: {
-  kind: TopActionKind;
-  label: string;
-  onPress: () => void;
-}) {
-  return (
-    <button type="button" style={iconCardButtonStyle} onClick={onPress}>
-      <div style={iconTitleStyle}>{label}</div>
-      <div style={iconBodyStyle}>
-        {kind === "supervisor" && (
-          <>
-            <div style={personStickStyle} />
-            <div
-              style={{
-                width: 24,
-                height: 24,
-                borderRadius: 999,
-                border: "3px solid #8b5cf6",
-                position: "relative",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                background: "#f8fafc",
-              }}
-            >
-              <div
-                style={{
-                  width: 8,
-                  height: 8,
-                  borderRadius: 999,
-                  background: "#8b5cf6",
-                  position: "absolute",
-                  top: 4,
-                }}
-              />
-              <div
-                style={{
-                  width: 12,
-                  height: 7,
-                  borderRadius: "8px 8px 4px 4px",
-                  background: "#c4b5fd",
-                  position: "absolute",
-                  bottom: 4,
-                }}
-              />
-            </div>
-          </>
-        )}
-
-        {kind === "material" && (
-          <>
-            <div
-              style={{
-                width: 28,
-                height: 18,
-                background: "#111827",
-                borderRadius: 2,
-                position: "relative",
-              }}
-            >
-              <div
-                style={{
-                  width: 12,
-                  height: 12,
-                  borderRadius: 999,
-                  background: "#111827",
-                  position: "absolute",
-                  bottom: -8,
-                  left: 2,
-                }}
-              />
-              <div
-                style={{
-                  width: 12,
-                  height: 12,
-                  borderRadius: 999,
-                  background: "#111827",
-                  position: "absolute",
-                  bottom: -8,
-                  right: 2,
-                }}
-              />
-              <div
-                style={{
-                  width: 8,
-                  height: 16,
-                  background: "#111827",
-                  position: "absolute",
-                  left: 4,
-                  top: -10,
-                }}
-              />
-            </div>
-            <div style={{ display: "grid", gap: 2 }}>
-              <div style={brownBoxStyle} />
-              <div style={brownBoxStyle} />
-            </div>
-          </>
-        )}
-
-        {kind === "quality" && (
-          <>
-            <div style={{ width: 18, height: 18, position: "relative" }}>
-              <div
-                style={{
-                  position: "absolute",
-                  inset: 0,
-                  background: "#ef4444",
-                  transform: "rotate(45deg)",
-                  borderRadius: 2,
-                }}
-              />
-              <div
-                style={{
-                  position: "absolute",
-                  top: 7,
-                  left: -2,
-                  width: 22,
-                  height: 4,
-                  background: "#ffffff",
-                  transform: "rotate(45deg)",
-                }}
-              />
-            </div>
-            <div
-              style={{
-                width: 28,
-                height: 20,
-                border: "2px solid #9ca3af",
-                background: "#ffffff",
-                position: "relative",
-              }}
-            >
-              <div
-                style={{
-                  position: "absolute",
-                  left: 5,
-                  top: 5,
-                  width: 15,
-                  height: 8,
-                  borderLeft: "5px solid #16a34a",
-                  borderBottom: "5px solid #16a34a",
-                  transform: "rotate(-45deg)",
-                }}
-              />
-            </div>
-          </>
-        )}
-
-        {kind === "maint" && (
-          <>
-            <div style={personStickStyle} />
-            <div style={{ width: 18, height: 26, position: "relative" }}>
-              <div
-                style={{
-                  width: 14,
-                  height: 14,
-                  borderRadius: 999,
-                  background: "#4338ca",
-                  margin: "0 auto 2px",
-                }}
-              />
-              <div
-                style={{
-                  width: 6,
-                  height: 10,
-                  background: "#6366f1",
-                  margin: "0 auto",
-                }}
-              />
-            </div>
-          </>
-        )}
-
-        {kind === "workinst" && (
-          <>
-            <div
-              style={{
-                width: 22,
-                height: 28,
-                background: "#f8fafc",
-                border: "2px solid #94a3b8",
-                position: "relative",
-              }}
-            >
-              <div style={miniLineStyle} />
-              <div style={{ ...miniLineStyle, top: 10 }} />
-              <div style={{ ...miniLineStyle, top: 16 }} />
-            </div>
-            <div
-              style={{
-                width: 0,
-                height: 0,
-                borderLeft: "14px solid transparent",
-                borderRight: "14px solid transparent",
-                borderBottom: "24px solid #fde047",
-                position: "relative",
-              }}
-            >
-              <div
-                style={{
-                  position: "absolute",
-                  left: -1,
-                  top: 8,
-                  color: "#111827",
-                  fontWeight: 700,
-                  fontSize: 14,
-                }}
-              >
-                !
-              </div>
-            </div>
-          </>
-        )}
-
-        {kind === "reports" && (
-          <div
-            style={{
-              width: 40,
-              height: 28,
-              position: "relative",
-              borderBottom: "3px solid #111827",
-              borderLeft: "3px solid #111827",
-            }}
-          >
-            <div
-              style={{
-                position: "absolute",
-                left: 4,
-                top: 18,
-                width: 8,
-                height: 3,
-                background: "#166534",
-                transform: "rotate(-55deg)",
-                transformOrigin: "left center",
-              }}
-            />
-            <div
-              style={{
-                position: "absolute",
-                left: 11,
-                top: 14,
-                width: 10,
-                height: 3,
-                background: "#166534",
-                transform: "rotate(18deg)",
-                transformOrigin: "left center",
-              }}
-            />
-            <div
-              style={{
-                position: "absolute",
-                left: 20,
-                top: 17,
-                width: 9,
-                height: 3,
-                background: "#166534",
-                transform: "rotate(-35deg)",
-                transformOrigin: "left center",
-              }}
-            />
-            <div
-              style={{
-                position: "absolute",
-                left: 28,
-                top: 12,
-                width: 7,
-                height: 3,
-                background: "#166534",
-                transform: "rotate(60deg)",
-                transformOrigin: "left center",
-              }}
-            />
-          </div>
-        )}
-      </div>
-    </button>
-  );
-}
-
-function PreviewRow({ label, value }: { label: string; value: string }) {
-  return (
-    <div style={{ marginBottom: 8 }}>
-      <div style={{ color: "#4b5563", fontSize: 12, marginBottom: 3, fontWeight: 700 }}>
-        {label}
-      </div>
-      <div
-        style={{
-          background: "#f8fafc",
-          color: "#111827",
-          minHeight: 42,
-          display: "flex",
-          alignItems: "center",
-          padding: "0 10px",
-          fontWeight: 700,
-          border: "1px solid #cbd5e1",
-          wordBreak: "break-word",
-        }}
-      >
-        {value}
-      </div>
-    </div>
-  );
-}
-
-function MiniInfo({
-  label,
-  value,
-  accent,
-}: {
-  label: string;
-  value: string;
-  accent?: string;
-}) {
-  return (
-    <div>
-      <div
-        style={{
-          color: accent || "#d1d5db",
-          fontSize: 11,
-          marginBottom: 2,
-          fontWeight: 700,
-        }}
-      >
-        {label}
-      </div>
-      <div
-        style={{
-          color: "#f8d34b",
-          fontSize: 24,
-          fontWeight: 700,
-          lineHeight: 1.05,
-          wordBreak: "break-word",
-        }}
-      >
-        {value}
-      </div>
-    </div>
-  );
-}
-
-function CounterHeader({ title }: { title: string }) {
-  return (
-    <div
-      style={{
-        color: "#d1d5db",
-        fontSize: 13,
-        fontWeight: 700,
-        marginBottom: 4,
-      }}
-    >
-      {title}
-    </div>
-  );
-}
-
-function MetricRow({
-  label,
-  value,
-  color,
-}: {
-  label: string;
-  value: string;
-  color: string;
-}) {
-  return (
-    <div
-      style={{
-        display: "grid",
-        gridTemplateColumns: "1fr auto",
-        alignItems: "center",
-        gap: 10,
-        marginBottom: 6,
-      }}
-    >
-      <div style={{ fontSize: 15, color: "#4b5563", fontWeight: 700 }}>{label}</div>
-      <div style={{ fontSize: 42, fontWeight: 700, color, lineHeight: 1, minWidth: 36 }}>
-        {value}
-      </div>
-    </div>
-  );
-}
-
-function FooterTag({ label, value }: { label: string; value: string }) {
-  return (
-    <div
-      style={{
-        borderTop: "1px solid #7f8796",
-        paddingTop: 4,
-      }}
-    >
-      <div style={footerLabelStyle}>{label}</div>
-      <div style={footerValueStyle}>{value}</div>
-    </div>
-  );
-}
-
-function getShiftInfo(date: Date): ShiftInfo {
-  const hour = date.getHours();
-
-  if (hour >= 22 || hour < 6) {
-    return { displayText: "Shift 1 - Midnight" };
-  }
-
-  if (hour >= 6 && hour < 14) {
-    return { displayText: "Shift 2 - Morning" };
-  }
-
-  return { displayText: "Shift 3 - Afternoon" };
-}
-
-function getActionLabel(kind: ActionRequestKind): string {
-  const labels: Record<ActionRequestKind, string> = {
-    supervisor: "Supervisor Request",
-    material: "Material Request",
-    quality: "Quality Request",
-    maint: "Maintenance Request",
-    workinst: "Work Instruction Request",
-  };
-
-  return labels[kind];
+function resolveExternalPartFromScan(rawValue: string) {
+  const foundPart = findCatalogPartByLabelScan(rawValue);
+  if (foundPart) return foundPart.externalPartNumber;
+  return tryExtractPartNumber(rawValue);
 }
 
 function formatUiDate(date: Date) {
@@ -1847,11 +486,1028 @@ function formatUiTime(date: Date) {
   }).format(date);
 }
 
-function formatElapsedTime(totalSeconds: number) {
-  const hours = String(Math.floor(totalSeconds / 3600)).padStart(2, "0");
-  const minutes = String(Math.floor((totalSeconds % 3600) / 60)).padStart(2, "0");
-  const seconds = String(totalSeconds % 60).padStart(2, "0");
-  return `${hours}:${minutes}:${seconds}`;
+function buildSessionAction(message: string) {
+  return `${formatUiTime(new Date())} - ${message}`;
+}
+
+function appendSessionAction(session: LabelSession, message: string): string[] {
+  const createdEntry = session.actionHistory.find((item) =>
+    String(item).toUpperCase().includes("LABEL SESSION CREATED")
+  );
+
+  const otherEntries = session.actionHistory.filter(
+    (item) => !String(item).toUpperCase().includes("LABEL SESSION CREATED")
+  );
+
+  const nextEntries = [...otherEntries, buildSessionAction(message)].slice(-19);
+  return createdEntry ? [createdEntry, ...nextEntries] : nextEntries;
+}
+
+function buildSessionMetrics(session: LabelSession): LabelSession {
+  const packedQty = session.scanHistory.filter((item) => item.status === "active").length;
+  const defectQty = session.scanHistory.filter((item) => item.status === "defect").length;
+  const remainingQty = Math.max(session.packagingQty - packedQty, 0);
+
+  let status: LabelSession["status"] = "active";
+  if (remainingQty === 0) status = "completed";
+
+  return {
+    ...session,
+    packedQty,
+    defectQty,
+    remainingQty,
+    status,
+  };
+}
+
+export default function App() {
+  const [screen, setScreen] = useState<AppScreen>("login");
+  const [scanStage, setScanStage] = useState<ScanStage>("idle");
+
+  const [employeeId, setEmployeeId] = useState("");
+  const [crewSize, setCrewSize] = useState("1");
+  const [machineMessage, setMachineMessage] = useState("System ready.");
+
+  const [stationConfig, setStationConfig] = useState<StationConfigData>({
+    stationId: "WP3-0031",
+    hmiCellCode: "WP3 - WP3-0031",
+    hmiTitle: "WP3 - WP3-0031",
+    version: "v 3.1.33.275",
+  });
+
+  const [labelDetailsDraft, setLabelDetailsDraft] = useState<LabelDetailsDraft | null>(null);
+  const [activeSession, setActiveSession] = useState<LabelSession | null>(null);
+
+  const [scanInputValue, setScanInputValue] = useState("");
+  const [scanStatus, setScanStatus] = useState<ScanStatus>("idle");
+  const [alerts, setAlerts] = useState<AlertItem[]>([]);
+
+  const stationId = stationConfig.stationId || "WP3-0031";
+  const hmiCellCode =
+    stationConfig.hmiCellCode || stationConfig.hmiTitle || "WP3 - WP3-0031";
+  const hmiVersion = stationConfig.version || "v 3.1.33.275";
+
+  const catalogCount = useMemo(() => PART_CATALOG.length, []);
+
+  const pushAlert = (level: AlertLevel, message: string) => {
+    setAlerts((prev) =>
+      [
+        {
+          id: `${Date.now()}-${Math.random()}`,
+          level,
+          message,
+          createdAt: Date.now(),
+        },
+        ...prev,
+      ].slice(0, 8)
+    );
+  };
+
+  useEffect(() => {
+    const loadStationConfig = async () => {
+      try {
+        const configResponse = await getStationConfig();
+        if (configResponse?.ok && configResponse?.data) {
+          setStationConfig({
+            stationId: configResponse.data.stationId || "WP3-0031",
+            hmiCellCode:
+              configResponse.data.hmiCellCode ||
+              configResponse.data.hmiTitle ||
+              "WP3 - WP3-0031",
+            hmiTitle:
+              configResponse.data.hmiTitle ||
+              configResponse.data.hmiCellCode ||
+              "WP3 - WP3-0031",
+            version: configResponse.data.version || "v 3.1.33.275",
+          });
+        }
+      } catch (error) {
+        console.error("Station config load failed:", error);
+      }
+    };
+
+    void loadStationConfig();
+  }, []);
+
+  const handleLogin = async () => {
+    if (!employeeId.trim() || !crewSize.trim()) {
+      setMachineMessage("Please enter Employee ID and Crew Size.");
+      pushAlert("warning", "Login validation failed.");
+      return;
+    }
+
+    try {
+      const result = await loginOperator({
+        employeeId: employeeId.trim(),
+        crewSize: Number(crewSize),
+      });
+
+      setEmployeeId(result.data.employeeId);
+      setCrewSize(String(result.data.crewSize));
+      setMachineMessage(result.message || "Login successful.");
+      pushAlert("success", "Operator login accepted.");
+      setScreen("partMenu");
+    } catch (error: unknown) {
+      const isNetworkError =
+        typeof error === "object" &&
+        error !== null &&
+        "message" in error &&
+        typeof (error as { message?: string }).message === "string" &&
+        (error as { message: string }).message.toLowerCase().includes("network");
+
+      if (isNetworkError) {
+        setMachineMessage("Demo mode login active. Backend is not reachable.");
+        pushAlert("warning", "Demo mode login active.");
+        setScreen("partMenu");
+        return;
+      }
+
+      setMachineMessage("Login failed. Please try again.");
+      pushAlert("error", "Login failed.");
+    }
+  };
+
+  const handleOpenDisplayPart = () => {
+    setLabelDetailsDraft(null);
+    setScanStage("labelCamera");
+    setMachineMessage("Scan or paste the label part number.");
+  };
+
+  const handleLabelDetected = (value: string) => {
+    const foundPart = findCatalogPartByLabelScan(value);
+    const extracted = tryExtractPartNumber(value);
+
+    if (!foundPart) {
+      setLabelDetailsDraft({
+        externalPartNumber: extracted,
+        internalNumber: "#N/A",
+        description: "#N/A",
+        packagingQty: "",
+        skdQty: "",
+      });
+      setScanStage("idle");
+      setMachineMessage("Label scanned. No exact row found. Enter quantities and continue if needed.");
+      pushAlert("warning", "Catalog row not found for scanned label.");
+      return;
+    }
+
+    setLabelDetailsDraft({
+      externalPartNumber: foundPart.externalPartNumber,
+      internalNumber: foundPart.internalNumber,
+      description: foundPart.description,
+      packagingQty: "",
+      skdQty: "",
+    });
+    setScanStage("idle");
+    setMachineMessage("Label scanned. Enter Packaging Qty and SKD Qty, then confirm.");
+    pushAlert("success", "Label scanned successfully.");
+  };
+
+  const handleConfirmLabel = () => {
+    if (!labelDetailsDraft) {
+      setMachineMessage("Scan a label first.");
+      pushAlert("warning", "No label details loaded.");
+      return;
+    }
+
+    const packagingQty = Number(labelDetailsDraft.packagingQty || 0);
+    const skdQty = Number(labelDetailsDraft.skdQty || 0);
+
+    if (!packagingQty || packagingQty <= 0) {
+      setMachineMessage("Please enter a valid Packaging Qty.");
+      pushAlert("warning", "Packaging Qty is required.");
+      return;
+    }
+
+    if (!skdQty || skdQty <= 0) {
+      setMachineMessage("Please enter a valid SKD Qty.");
+      pushAlert("warning", "SKD Qty is required.");
+      return;
+    }
+
+    const nextSession = buildSessionMetrics({
+      sessionId: `SESSION-${Date.now()}`,
+      externalPartNumber: labelDetailsDraft.externalPartNumber,
+      internalNumber: labelDetailsDraft.internalNumber || "#N/A",
+      description: labelDetailsDraft.description || "#N/A",
+      packagingQty,
+      skdQty,
+      packedQty: 0,
+      remainingQty: packagingQty,
+      defectQty: 0,
+      status: "active",
+      startedAt: Date.now(),
+      lastScannedValue: "",
+      lastResolvedExternalPartNumber: "",
+      scanHistory: [],
+      actionHistory: [
+        buildSessionAction(
+          `Label session created - EXT ${labelDetailsDraft.externalPartNumber} - INT ${labelDetailsDraft.internalNumber || "#N/A"} - PKG ${packagingQty} - SKD ${skdQty}`
+        ),
+      ],
+    });
+
+    setActiveSession(nextSession);
+    setScanInputValue("");
+    setScanStatus("idle");
+    setScreen("hmi");
+    setMachineMessage("Label confirmed. HMI is ready for barcode scanning.");
+  };
+
+  const handlePartScanFromValue = (rawValue: string) => {
+    if (!activeSession) {
+      setMachineMessage("No active label session.");
+      setScanStatus("error");
+      pushAlert("error", "No active label session.");
+      return;
+    }
+
+    const normalizedRaw = normalizeScanValue(rawValue);
+    if (!normalizedRaw) {
+      setMachineMessage("Scan or paste a barcode first.");
+      setScanStatus("error");
+      pushAlert("warning", "Barcode input is empty.");
+      return;
+    }
+
+    const resolvedExternalPartNumber = resolveExternalPartFromScan(rawValue);
+
+    if (activeSession.remainingQty <= 0) {
+      setMachineMessage("Container already complete. Over-scan blocked.");
+      setScanStatus("error");
+      pushAlert("error", "Over-scan blocked.");
+      return;
+    }
+
+    const isMatch =
+      normalizeCatalogKey(resolvedExternalPartNumber) ===
+      normalizeCatalogKey(activeSession.externalPartNumber);
+
+    if (!isMatch) {
+      setActiveSession({
+        ...activeSession,
+        status: "error",
+        lastScannedValue: normalizedRaw,
+        lastResolvedExternalPartNumber: resolvedExternalPartNumber,
+        actionHistory: appendSessionAction(
+          activeSession,
+          `Rejected scan ${resolvedExternalPartNumber}.`
+        ),
+      });
+      setMachineMessage("Wrong part barcode rejected.");
+      setScanStatus("error");
+      pushAlert("error", "Wrong part barcode scanned.");
+      return;
+    }
+
+    const newRecord: SessionScanRecord = {
+      id: `${Date.now()}-${Math.random()}`,
+      rawBarcode: normalizedRaw,
+      resolvedExternalPartNumber,
+      status: "active",
+      scannedAt: Date.now(),
+    };
+
+    const nextSession = buildSessionMetrics({
+      ...activeSession,
+      lastScannedValue: normalizedRaw,
+      lastResolvedExternalPartNumber: resolvedExternalPartNumber,
+      scanHistory: [newRecord, ...activeSession.scanHistory],
+      actionHistory: appendSessionAction(
+        activeSession,
+        `Accepted scan ${resolvedExternalPartNumber}.`
+      ),
+    });
+
+    setActiveSession(nextSession);
+    setScanInputValue("");
+    setScanStatus("success");
+
+    if (nextSession.remainingQty === 0) {
+      setMachineMessage("Container complete.");
+      pushAlert("success", "Container complete.");
+    } else {
+      setMachineMessage(`Scan accepted. Remaining ${nextSession.remainingQty}.`);
+      pushAlert("success", "Part barcode accepted.");
+    }
+  };
+
+  const handlePartScan = () => {
+    handlePartScanFromValue(scanInputValue);
+  };
+
+  const handleDefect = () => {
+    if (!activeSession) {
+      setMachineMessage("No active label session.");
+      pushAlert("warning", "Defect action requires active session.");
+      return;
+    }
+
+    const candidate = activeSession.scanHistory.find((item) => item.status === "active");
+    if (!candidate) {
+      setMachineMessage("No active scanned part available to mark as defect.");
+      pushAlert("warning", "No active scanned part available.");
+      return;
+    }
+
+    const nextHistory = activeSession.scanHistory.map((item) =>
+      item.id === candidate.id ? { ...item, status: "defect" as const } : item
+    );
+
+    const nextSession = buildSessionMetrics({
+      ...activeSession,
+      scanHistory: nextHistory,
+      actionHistory: appendSessionAction(
+        activeSession,
+        `Marked ${candidate.resolvedExternalPartNumber} as defect. Replacement scan required.`
+      ),
+    });
+
+    setActiveSession(nextSession);
+    setScanStatus("error");
+    setMachineMessage("Defect recorded. Replacement scan required.");
+    pushAlert("error", "Defect recorded.");
+  };
+
+  const handleChangePart = () => {
+    setActiveSession(null);
+    setLabelDetailsDraft(null);
+    setScanInputValue("");
+    setScanStatus("idle");
+    setScreen("partMenu");
+    setMachineMessage("Start a new label session.");
+  };
+
+  const handleLogout = () => {
+    setEmployeeId("");
+    setCrewSize("1");
+    setLabelDetailsDraft(null);
+    setActiveSession(null);
+    setScanInputValue("");
+    setScanStatus("idle");
+    setAlerts([]);
+    setScreen("login");
+    setScanStage("idle");
+    setMachineMessage("Operator logged out.");
+  };
+
+  return (
+    <main style={mainShellStyle}>
+      <style>{responsiveCss}</style>
+
+      {screen === "login" && (
+        <LoginScreen
+          stationId={stationId}
+          hmiVersion={hmiVersion}
+          employeeId={employeeId}
+          crewSize={crewSize}
+          onEmployeeIdChange={setEmployeeId}
+          onCrewSizeChange={setCrewSize}
+          onLogin={handleLogin}
+        />
+      )}
+
+      {screen === "partMenu" && (
+        <PartMenuScreen
+          hmiCellCode={hmiCellCode}
+          hmiVersion={hmiVersion}
+          machineMessage={machineMessage}
+          catalogCount={catalogCount}
+          labelDetailsDraft={labelDetailsDraft}
+          onPackagingQtyChange={(value) =>
+            setLabelDetailsDraft((prev) => (prev ? { ...prev, packagingQty: value } : prev))
+          }
+          onSkdQtyChange={(value) =>
+            setLabelDetailsDraft((prev) => (prev ? { ...prev, skdQty: value } : prev))
+          }
+          onDisplayPart={handleOpenDisplayPart}
+          onConfirmLabel={handleConfirmLabel}
+          onLogout={handleLogout}
+        />
+      )}
+
+      {screen === "hmi" && activeSession && (
+        <HmiScreen
+          hmiCellCode={hmiCellCode}
+          hmiVersion={hmiVersion}
+          stationId={stationId}
+          employeeId={employeeId}
+          crewSize={crewSize}
+          machineMessage={machineMessage}
+          activeSession={activeSession}
+          alerts={alerts}
+          scanStatus={scanStatus}
+          scanInputValue={scanInputValue}
+          onScanInputChange={setScanInputValue}
+          onScan={handlePartScan}
+          onOpenCamera={() => setScanStage("partCamera")}
+          onDefect={handleDefect}
+          onChangePart={handleChangePart}
+          onLogout={handleLogout}
+        />
+      )}
+
+      <CameraScanModal
+        isOpen={scanStage === "labelCamera"}
+        title="SCAN LABEL"
+        helperText="Scan or paste the label part number."
+        onClose={() => setScanStage("idle")}
+        onDetected={handleLabelDetected}
+      />
+
+      <CameraScanModal
+        isOpen={scanStage === "partCamera"}
+        title="SCAN PART BARCODE"
+        helperText="Scan or paste the part barcode. The scan will be submitted automatically."
+        onClose={() => setScanStage("idle")}
+        onDetected={(value) => {
+          setScanStage("idle");
+          handlePartScanFromValue(value);
+        }}
+      />
+    </main>
+  );
+}
+
+function CameraScanModal({
+  isOpen,
+  title,
+  helperText,
+  onClose,
+  onDetected,
+}: CameraScanModalProps) {
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const scanTimerRef = useRef<number | null>(null);
+  const detectedOnceRef = useRef(false);
+  const [statusText, setStatusText] = useState("Starting camera...");
+  const [manualValue, setManualValue] = useState("");
+
+  useEffect(() => {
+    if (!isOpen) return;
+
+    let mounted = true;
+    detectedOnceRef.current = false;
+    setStatusText("Starting camera...");
+
+    const start = async () => {
+      try {
+        if (!navigator.mediaDevices?.getUserMedia) {
+          setStatusText("Camera API is not available. Use manual input below.");
+          return;
+        }
+
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            facingMode: { ideal: "environment" },
+            width: { ideal: 1280 },
+            height: { ideal: 720 },
+          },
+          audio: false,
+        });
+
+        if (!mounted) return;
+
+        streamRef.current = stream;
+
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+          await videoRef.current.play();
+        }
+
+        const DetectorCtor = (
+          window as unknown as {
+            BarcodeDetector?: new (options?: unknown) => {
+              detect: (
+                source: HTMLVideoElement
+              ) => Promise<Array<{ rawValue?: string }>>;
+            };
+          }
+        ).BarcodeDetector;
+
+        if (!DetectorCtor) {
+          setStatusText("BarcodeDetector is not supported here. Use manual input below.");
+          return;
+        }
+
+        const detector = new DetectorCtor({
+          formats: ["code_39", "code_128", "qr_code", "ean_13", "ean_8", "upc_a", "upc_e"],
+        });
+
+        setStatusText("Point the camera at the barcode.");
+
+        scanTimerRef.current = window.setInterval(async () => {
+          try {
+            if (!videoRef.current || detectedOnceRef.current) return;
+            const barcodes = await detector.detect(videoRef.current);
+            const rawValue = String(barcodes?.[0]?.rawValue || "").trim();
+
+            if (rawValue && !detectedOnceRef.current) {
+              detectedOnceRef.current = true;
+              setStatusText("Barcode detected.");
+              onDetected(rawValue);
+            }
+          } catch {
+            // Ignore frame scan errors.
+          }
+        }, 450);
+      } catch {
+        setStatusText("Camera access failed. Use manual input below.");
+      }
+    };
+
+    void start();
+
+    return () => {
+      mounted = false;
+
+      if (scanTimerRef.current) {
+        window.clearInterval(scanTimerRef.current);
+        scanTimerRef.current = null;
+      }
+
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach((track) => track.stop());
+        streamRef.current = null;
+      }
+
+      setManualValue("");
+      detectedOnceRef.current = false;
+    };
+  }, [isOpen, onDetected]);
+
+  if (!isOpen) return null;
+
+  return (
+    <div style={modalOverlayStyle}>
+      <div style={cameraModalPanelStyle}>
+        <div style={cameraModalHeaderStyle}>{title}</div>
+        <div style={cameraHelperTextStyle}>{helperText}</div>
+
+        <div style={cameraVideoWrapStyle}>
+          <video ref={videoRef} style={cameraVideoStyle} playsInline muted autoPlay />
+        </div>
+
+        <div style={cameraStatusStyle}>{statusText}</div>
+
+        <textarea
+          value={manualValue}
+          onChange={(e) => setManualValue(e.target.value)}
+          placeholder="Paste barcode text here if camera is not available"
+          style={cameraManualInputStyle}
+        />
+
+        <div style={modalButtonsRowStyle}>
+          <button
+            style={modalSubmitButtonStyle}
+            onClick={() => {
+              const value = manualValue.trim();
+              if (!value || detectedOnceRef.current) return;
+              detectedOnceRef.current = true;
+              onDetected(value);
+            }}
+          >
+            USE VALUE
+          </button>
+          <button style={modalCancelButtonStyle} onClick={onClose}>
+            CLOSE
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function LoginScreen({
+  stationId,
+  hmiVersion,
+  employeeId,
+  crewSize,
+  onEmployeeIdChange,
+  onCrewSizeChange,
+  onLogin,
+}: {
+  stationId: string;
+  hmiVersion: string;
+  employeeId: string;
+  crewSize: string;
+  onEmployeeIdChange: (value: string) => void;
+  onCrewSizeChange: (value: string) => void;
+  onLogin: () => void;
+}) {
+  return (
+    <section style={loginScreenStyle}>
+      <div style={loginHeaderStyle}>
+        <div style={loginTitleStyle}>WP3 - {stationId}</div>
+        <div style={loginVersionStyle}>{hmiVersion}</div>
+      </div>
+
+      <div style={loginFormCardStyle}>
+        <div style={loginGridStyle}>
+          <label style={loginLabelStyle}>STATION ID</label>
+          <input value={stationId} readOnly style={loginInputStyle} />
+
+          <label style={loginLabelStyle}>EMPLOYEE ID</label>
+          <input
+            value={employeeId}
+            onChange={(e) => onEmployeeIdChange(e.target.value)}
+            style={loginInputStyle}
+          />
+
+          <label style={loginLabelStyle}>CREW SIZE</label>
+          <select
+            value={crewSize}
+            onChange={(e) => onCrewSizeChange(e.target.value)}
+            style={loginInputStyle}
+          >
+            {Array.from({ length: 15 }, (_, i) => String(i + 1)).map((value) => (
+              <option key={value} value={value}>
+                {value}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <button style={primaryButtonStyle} onClick={onLogin}>
+          LOGIN
+        </button>
+      </div>
+    </section>
+  );
+}
+
+function PartMenuScreen({
+  hmiCellCode,
+  hmiVersion,
+  machineMessage,
+  catalogCount,
+  labelDetailsDraft,
+  onPackagingQtyChange,
+  onSkdQtyChange,
+  onDisplayPart,
+  onConfirmLabel,
+  onLogout,
+}: {
+  hmiCellCode: string;
+  hmiVersion: string;
+  machineMessage: string;
+  catalogCount: number;
+  labelDetailsDraft: LabelDetailsDraft | null;
+  onPackagingQtyChange: (value: string) => void;
+  onSkdQtyChange: (value: string) => void;
+  onDisplayPart: () => void;
+  onConfirmLabel: () => void;
+  onLogout: () => void;
+}) {
+  return (
+    <section style={mobileAppShellStyle}>
+      <div style={mobileTopHeaderStyle}>
+        <div style={mobileTopHeaderTitleStyle}>{hmiCellCode}</div>
+        <div style={mobileTopHeaderMetaStyle}>{hmiVersion}</div>
+        <div style={mobileTopHeaderSubMetaStyle}>PART CATALOG: {catalogCount}</div>
+      </div>
+
+      <div style={mobileCardStyle}>
+        <div style={mobileSectionTitleStyle}>DISPLAY PART</div>
+
+        <div style={mobileDetailGridStyle}>
+          <MobileDetailField
+            label="External Part #"
+            value={labelDetailsDraft?.externalPartNumber ?? ""}
+          />
+          <MobileDetailField
+            label="Internal Number"
+            value={labelDetailsDraft?.internalNumber ?? ""}
+          />
+          <MobileDetailField
+            label="Description"
+            value={labelDetailsDraft?.description ?? ""}
+            multiline
+          />
+        </div>
+
+        <div style={mobileInputGridStyle}>
+          <div>
+            <div style={mobileFieldLabelStyle}>Packaging Qty</div>
+            <input
+              value={labelDetailsDraft?.packagingQty ?? ""}
+              onChange={(e) => onPackagingQtyChange(e.target.value)}
+              style={mobileInputStyle}
+              inputMode="numeric"
+              placeholder="Packaging Qty"
+            />
+          </div>
+
+          <div>
+            <div style={mobileFieldLabelStyle}>SKD Qty</div>
+            <input
+              value={labelDetailsDraft?.skdQty ?? ""}
+              onChange={(e) => onSkdQtyChange(e.target.value)}
+              style={mobileInputStyle}
+              inputMode="numeric"
+              placeholder="SKD Qty"
+            />
+          </div>
+        </div>
+      </div>
+
+      <div style={mobileButtonGridTwoStyle}>
+        <button style={primaryButtonStyle} onClick={onDisplayPart}>
+          DISPLAY PART
+        </button>
+        <button style={secondaryButtonStyle} onClick={onConfirmLabel}>
+          CONFIRM
+        </button>
+        <button style={dangerButtonStyle} onClick={onLogout}>
+          LOGOUT
+        </button>
+      </div>
+
+      <div style={mobileMessageBarStyle}>{machineMessage}</div>
+    </section>
+  );
+}
+
+function HmiScreen({
+  hmiCellCode,
+  hmiVersion,
+  stationId,
+  employeeId,
+  crewSize,
+  machineMessage,
+  activeSession,
+  alerts,
+  scanStatus,
+  scanInputValue,
+  onScanInputChange,
+  onScan,
+  onOpenCamera,
+  onDefect,
+  onChangePart,
+  onLogout,
+}: {
+  hmiCellCode: string;
+  hmiVersion: string;
+  stationId: string;
+  employeeId: string;
+  crewSize: string;
+  machineMessage: string;
+  activeSession: LabelSession;
+  alerts: AlertItem[];
+  scanStatus: ScanStatus;
+  scanInputValue: string;
+  onScanInputChange: (value: string) => void;
+  onScan: () => void;
+  onOpenCamera: () => void;
+  onDefect: () => void;
+  onChangePart: () => void;
+  onLogout: () => void;
+}) {
+  const [now, setNow] = useState(new Date());
+  const scanInputRef = useRef<HTMLTextAreaElement | null>(null);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(new Date()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    scanInputRef.current?.focus();
+  }, []);
+
+  const historyRows =
+    activeSession.actionHistory.length > 0
+      ? activeSession.actionHistory
+      : alerts.map((alert) => alert.message);
+
+  return (
+    <section style={mobileAppShellStyle}>
+      <div style={mobileTopHeaderStyle}>
+        <div style={mobileTopHeaderTitleStyle}>{hmiCellCode}</div>
+        <div style={mobileTopHeaderMetaStyle}>{hmiVersion}</div>
+      </div>
+
+      <div style={mobileDescriptionCardStyle}>
+        <div style={mobileDescriptionLabelStyle}>PART DESCRIPTION</div>
+        <div style={mobileDescriptionValueStyle}>
+          {activeSession.description || "#N/A"}
+        </div>
+
+        <div style={mobileDescriptionMetaRowStyle}>
+          <span style={mobileDescriptionMetaPillStyle}>
+            EXT: {activeSession.externalPartNumber || "#N/A"}
+          </span>
+          <span style={mobileDescriptionMetaPillStyle}>
+            INT: {activeSession.internalNumber || "#N/A"}
+          </span>
+        </div>
+      </div>
+
+      <div style={mobileCardStyle}>
+        <div style={mobileCardHeaderRowStyle}>
+          <div style={mobileSectionTitleStyle}>SESSION HISTORY</div>
+          <div
+            style={{
+              ...mobileStatusPillStyle,
+              background:
+                scanStatus === "success"
+                  ? "#16a34a"
+                  : scanStatus === "error"
+                  ? "#dc2626"
+                  : "#475569",
+            }}
+          >
+            {(activeSession.status || "idle").toUpperCase()}
+          </div>
+        </div>
+
+        <div style={mobileHistoryListStyle}>
+          {historyRows.length ? (
+            historyRows.map((item, index) => {
+              const normalizedItem = String(item).toUpperCase();
+
+              const isCreated = normalizedItem.includes("LABEL SESSION CREATED");
+              const isAccepted = normalizedItem.includes("ACCEPTED SCAN");
+              const isRejected = normalizedItem.includes("REJECTED SCAN");
+              const isDefect = normalizedItem.includes("DEFECT");
+
+              return (
+                <div
+                  key={`${item}-${index}`}
+                  style={{
+                    ...mobileHistoryItemStyle,
+                    borderLeft:
+                      isCreated
+                        ? "5px solid #2563eb"
+                        : isAccepted
+                        ? "5px solid #16a34a"
+                        : isRejected
+                        ? "5px solid #f59e0b"
+                        : isDefect
+                        ? "5px solid #dc2626"
+                        : "5px solid #94a3b8",
+                    background:
+                      isCreated
+                        ? "#dbeafe"
+                        : isAccepted
+                        ? "#dcfce7"
+                        : isRejected
+                        ? "#fef3c7"
+                        : isDefect
+                        ? "#fee2e2"
+                        : "#f8fafc",
+                    color:
+                      isDefect
+                        ? "#991b1b"
+                        : isRejected
+                        ? "#92400e"
+                        : isAccepted
+                        ? "#166534"
+                        : "#0f172a",
+                  }}
+                >
+                  {item}
+                </div>
+              );
+            })
+          ) : (
+            <div style={mobileHistoryEmptyStyle}>No session history yet.</div>
+          )}
+        </div>
+
+        <button style={scannerBigButtonStyle} onClick={onOpenCamera}>
+          SCANNER
+        </button>
+
+        <textarea
+          ref={scanInputRef}
+          value={scanInputValue}
+          onChange={(e) => onScanInputChange(e.target.value)}
+          placeholder="Scanner value will appear here"
+          style={mobileScanTextareaStyle}
+          readOnly
+        />
+
+        <div style={mobileOperatorActionGridStyle}>
+          <button style={primaryButtonStyle} onClick={onScan}>
+            SUBMIT
+          </button>
+          <button style={warningButtonStyle} onClick={onDefect}>
+            DEFECT
+          </button>
+        </div>
+
+        <div style={mobileOperatorActionGridStyle}>
+          <button style={secondaryButtonStyle} onClick={onChangePart}>
+            CHANGE PART
+          </button>
+          <button style={dangerButtonStyle} onClick={onLogout}>
+            LOGOUT
+          </button>
+        </div>
+      </div>
+
+      <div style={mobileCardStyle}>
+        <div style={mobileSectionTitleStyle}>CONTAINER / PROCESS</div>
+
+        <div style={mobileStatGridStyle}>
+          <MobileStatCard label="PACKED" value={String(activeSession.packedQty)} />
+          <MobileStatCard label="REMAINING" value={String(activeSession.remainingQty)} />
+          <MobileStatCard label="DEFECT" value={String(activeSession.defectQty)} danger />
+          <MobileStatCard label="PKG QTY" value={String(activeSession.packagingQty)} />
+          <MobileStatCard label="SKD QTY" value={String(activeSession.skdQty)} />
+          <MobileStatCard label="STATUS" value={activeSession.status.toUpperCase()} />
+        </div>
+
+        <div style={mobileInfoStripStyle}>
+          <div style={mobileInfoStripItemStyle}>
+            <span style={mobileInfoStripLabelStyle}>Last Scan</span>
+            <span style={mobileInfoStripValueStyle}>
+              {activeSession.lastScannedValue || "-"}
+            </span>
+          </div>
+
+          <div style={mobileInfoStripItemStyle}>
+            <span style={mobileInfoStripLabelStyle}>Resolved Part</span>
+            <span style={mobileInfoStripValueStyle}>
+              {activeSession.lastResolvedExternalPartNumber || "-"}
+            </span>
+          </div>
+        </div>
+      </div>
+
+      <div style={mobileMetaGridStyle}>
+        <MobileMetaCard label="SHIFT" value="Mobile Scan Mode" />
+        <MobileMetaCard label="CREW SIZE" value={crewSize || "-"} />
+        <MobileMetaCard label="DATE" value={formatUiDate(now)} />
+        <MobileMetaCard label="TIME" value={formatUiTime(now)} />
+        <MobileMetaCard label="STATION" value={stationId || "-"} />
+        <MobileMetaCard label="EMPLOYEE" value={employeeId || "-"} />
+      </div>
+
+      <div style={mobileMessageBarStyle}>{machineMessage}</div>
+    </section>
+  );
+}
+
+function MobileDetailField({
+  label,
+  value,
+  multiline,
+}: {
+  label: string;
+  value: string;
+  multiline?: boolean;
+}) {
+  return (
+    <div style={{ marginBottom: 10, minWidth: 0 }}>
+      <div style={mobileFieldLabelStyle}>{label}</div>
+      <div
+        style={{
+          ...mobileFieldValueStyle,
+          minHeight: multiline ? 64 : 44,
+          alignItems: multiline ? "flex-start" : "center",
+          paddingTop: multiline ? 10 : 0,
+          lineHeight: multiline ? 1.35 : 1.1,
+        }}
+      >
+        {value || "-"}
+      </div>
+    </div>
+  );
+}
+
+function MobileStatCard({
+  label,
+  value,
+  danger,
+}: {
+  label: string;
+  value: string;
+  danger?: boolean;
+}) {
+  return (
+    <div style={mobileStatCardStyle}>
+      <div style={mobileStatLabelStyle}>{label}</div>
+      <div
+        style={{
+          ...mobileStatValueStyle,
+          color: danger ? "#ef4444" : "#f8d34b",
+        }}
+      >
+        {value}
+      </div>
+    </div>
+  );
+}
+
+function MobileMetaCard({ label, value }: { label: string; value: string }) {
+  return (
+    <div style={mobileMetaCardStyle}>
+      <div style={mobileMetaCardLabelStyle}>{label}</div>
+      <div style={mobileMetaCardValueStyle}>{value}</div>
+    </div>
+  );
 }
 
 const responsiveCss = `
@@ -1859,237 +1515,53 @@ const responsiveCss = `
   box-sizing: border-box;
 }
 
-button,
-input,
-select,
-textarea {
+html, body, #root {
+  width: 100%;
+  min-height: 100%;
+  margin: 0;
+  overflow-x: hidden;
+  background: #262c35;
+}
+
+button, input, select, textarea {
   font: inherit;
-}
-  @media (max-width: 700px) {
-  .lineup-top-row {
-    flex-wrap: wrap !important;
-    align-items: flex-start !important;
-  }
-}
-  @media (max-width: 700px) {
-  .partmenu-buttons-row {
-    grid-template-columns: 1fr !important;
-  }
+  max-width: 100%;
 }
 
-@media (max-width: 900px) {
-  .lineup-content-wrap {
-    grid-template-columns: 1fr !important;
-    gap: 12px !important;
-  }
-
-  .hmi-main-grid {
-    grid-template-columns: 1fr !important;
-  }
-
-  .production-panel-grid {
-    grid-template-columns: 1fr !important;
-  }
-
-  .external-info-grid {
-    grid-template-columns: 1fr !important;
-  }
-
-  .fixture-id-box {
-    grid-column: auto !important;
-    text-align: left !important;
-    margin-top: 4px;
-  }
-
-  .footer-tags-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
-  }
-
-  .touch-modal-panel {
-    width: min(94vw, 760px) !important;
-    max-height: 88vh !important;
-    overflow-y: auto !important;
-  }
-
-  .downtime-columns-grid {
-    grid-template-columns: 1fr !important;
-    min-height: auto !important;
-  }
-
-  .downtime-column-headers {
-    display: none !important;
-  }
-
-  .downtime-bottom-bar {
-    flex-direction: column !important;
-    align-items: stretch !important;
-  }
-
-  .top-icon-bar {
-    width: 100% !important;
-    display: grid !important;
-    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
-    gap: 8px !important;
-  }
-}
+button {
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
 }
 
-@media (max-width: 700px) {
-  .top-icon-bar {
-    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
-  }
+textarea[readonly] {
+  user-select: none;
 }
 
-@media (max-width: 1100px) {
-  .hmi-main-grid {
-    grid-template-columns: 250px minmax(0, 1fr) 220px !important;
+@media (max-width: 640px) {
+  main {
+    padding: 8px !important;
   }
 
-  .footer-tags-grid {
-    grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
-  }
-}
-
-@media (max-height: 820px) {
-  .hmi-title {
-    font-size: 34px !important;
-  }
-
-  .top-icon-bar button {
+  button {
     min-height: 52px !important;
+    font-size: 13px !important;
+    border-radius: 14px !important;
+  }
+
+  input, select, textarea {
+    font-size: 16px !important;
   }
 }
 
-@media (max-width: 900px) {
-  .lineup-content-wrap {
-    grid-template-columns: 1fr !important;
-  }
-
-  .hmi-main-grid {
-    grid-template-columns: 1fr !important;
-  }
-
-  .production-panel-grid {
-    grid-template-columns: 1fr !important;
-  }
-
-  .external-info-grid {
-    grid-template-columns: 1fr !important;
-  }
-
-  .fixture-id-box {
-    grid-column: auto !important;
-    text-align: left !important;
-    margin-top: 4px;
-  }
-
-  .footer-tags-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
-  }
-
-  .touch-modal-panel {
-    width: min(94vw, 760px) !important;
-    max-height: 88vh !important;
-    overflow-y: auto !important;
-  }
-
-  .downtime-columns-grid {
-    grid-template-columns: 1fr !important;
-    min-height: auto !important;
-  }
-
-  .downtime-column-headers {
-    display: none !important;
-  }
-
-  .downtime-bottom-bar {
-    flex-direction: column !important;
-    align-items: stretch !important;
-  }
-
-  .top-icon-bar {
-    width: 100% !important;
-    display: grid !important;
-    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
-    gap: 8px !important;
-  }
-}
-
-@media (max-width: 700px) {
-  .login-grid {
-    grid-template-columns: 1fr !important;
-  }
-
-  .login-buttons-row,
-  .partmenu-buttons-row {
-    grid-template-columns: 1fr !important;
-  }
-
-  .lineup-content-wrap {
-    grid-template-columns: 1fr !important;
-  }
-
-  .lineup-top-row {
-    flex-wrap: wrap !important;
-    align-items: flex-start !important;
-  }
-
-  .hmi-top-header {
-    flex-direction: column !important;
-    align-items: stretch !important;
-  }
-
-  .hmi-title {
-    font-size: 24px !important;
-    line-height: 1.08 !important;
-    word-break: break-word !important;
-  }
-
-  .general-info-grid {
-    grid-template-columns: 1fr !important;
-  }
-
-  .hmi-actions-grid {
-    grid-template-columns: 1fr 1fr !important;
-  }
-
-  .footer-tags-grid {
-    grid-template-columns: 1fr !important;
-  }
-
-  .top-icon-bar {
-    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
-  }
-}
-
-@media (max-width: 520px) {
-  .general-info-grid {
-    grid-template-columns: 1fr !important;
-  }
-
-  .hmi-actions-grid {
-    grid-template-columns: 1fr 1fr !important;
-  }
-
-  .footer-tags-grid {
-    grid-template-columns: 1fr !important;
-  }
-
-  .top-icon-bar {
-    grid-template-columns: 1fr 1fr !important;
-  }
-
-  .touch-modal-panel {
-    width: 94vw !important;
-    padding: 14px !important;
-  }
-
-  .hmi-title {
-    font-size: 20px !important;
+@media (max-width: 420px) {
+  button {
+    font-size: 12px !important;
+    padding-left: 5px !important;
+    padding-right: 5px !important;
   }
 }
 `;
-
 
 const mainShellStyle = {
   width: "100%",
@@ -2097,678 +1569,478 @@ const mainShellStyle = {
   background: "#262c35",
   display: "flex",
   justifyContent: "center",
-  padding: "10px 12px 18px",
-  boxSizing: "border-box" as const,
+  alignItems: "flex-start",
+  padding: "12px",
   fontFamily: "Arial, sans-serif",
   overflowX: "hidden" as const,
   overflowY: "auto" as const,
 };
 
-const loginCardStyle = {
+const loginScreenStyle = {
   width: "100%",
-  maxWidth: 680,
-  background: "#474d5d",
-  border: "2px solid #707786",
-  padding: 0,
-  boxSizing: "border-box" as const,
-  color: "#ffffff",
-  overflow: "hidden",
-  boxShadow: "0 16px 36px rgba(0,0,0,0.35)",
+  maxWidth: 560,
+  display: "grid",
+  gap: 14,
 };
 
 const loginHeaderStyle = {
-  background: "#3f4553",
-  padding: "18px 22px",
-  borderBottom: "1px solid #687180",
+  background: "linear-gradient(180deg, #7c8598 0%, #6d7688 100%)",
+  border: "1px solid #7e8797",
+  borderRadius: 20,
+  padding: 18,
+  color: "#ffffff",
+  boxShadow: "0 12px 24px rgba(0,0,0,0.22)",
 };
 
 const loginTitleStyle = {
-  textAlign: "center" as const,
-  fontSize: 30,
+  fontSize: "clamp(22px, 6vw, 28px)",
+  fontWeight: 900,
+  lineHeight: 1.05,
+  wordBreak: "break-word" as const,
+};
+
+const loginVersionStyle = {
+  marginTop: 8,
+  fontSize: 12,
   fontWeight: 700,
-  marginBottom: 6,
-  letterSpacing: 0.5,
+  color: "#e5e7eb",
 };
 
-const loginSubTitleStyle = {
-  textAlign: "center" as const,
-  fontSize: 13,
-  color: "#d1d5db",
-};
-
-const loginPanelStyle = {
-  padding: 26,
+const loginFormCardStyle = {
+  background: "#e5e7eb",
+  border: "1px solid #cbd5e1",
+  borderRadius: 20,
+  padding: 16,
+  display: "grid",
+  gap: 16,
+  boxShadow: "0 10px 22px rgba(15,23,42,0.14)",
 };
 
 const loginGridStyle = {
   display: "grid",
-  gridTemplateColumns: "180px 1fr",
-  gap: 16,
+  gridTemplateColumns: "minmax(100px, 150px) minmax(0, 1fr)",
+  gap: 12,
   alignItems: "center",
 };
 
 const loginLabelStyle = {
-  fontSize: 16,
-  fontWeight: 700,
-  color: "#e5e7eb",
-};
-
-const inputStyle = {
-  height: 56,
-  border: "1px solid #9ca3af",
-  background: "#f8fafc",
-  padding: "0 12px",
-  fontSize: 18,
-  outline: "none",
-  boxSizing: "border-box" as const,
-  width: "100%",
-  minWidth: 0,
-};
-
-const loginButtonsRowStyle = {
-  display: "grid",
-  gridTemplateColumns: "1fr 1fr 1fr",
-  gap: 12,
-  marginTop: 24,
-};
-
-const greenLoginButtonStyle = {
-  height: 62,
-  border: "none",
-  background: "#16a34a",
-  color: "#ffffff",
-  fontWeight: 700,
-  fontSize: 18,
-  cursor: "pointer",
-};
-
-const redLoginButtonStyle = {
-  height: 62,
-  border: "none",
-  background: "#d31717",
-  color: "#ffffff",
-  fontWeight: 700,
-  fontSize: 18,
-  cursor: "pointer",
-};
-
-const grayLoginButtonStyle = {
-  height: 62,
-  border: "none",
-  background: "#7b8496",
-  color: "#ffffff",
-  fontWeight: 700,
-  fontSize: 18,
-  cursor: "pointer",
-};
-
-const menuPageWrapStyle = {
-  width: "100%",
-  maxWidth: 1400,
-};
-
-const menuTopMetaStyle = {
-  display: "flex",
-  gap: 18,
-  flexWrap: "wrap" as const,
   fontSize: 14,
-  color: "#d1d5db",
-  marginBottom: 12,
+  fontWeight: 800,
+  color: "#1f2937",
 };
 
-const whiteMenuBoxStyle = {
-  width: "100%",
-  background: "#ffffff",
-  color: "#111827",
-  border: "2px solid #d1d5db",
-  padding: 18,
-  boxSizing: "border-box" as const,
-  minHeight: "calc(100vh - 72px)",
-  overflow: "hidden" as const,
-};
-
-const whiteMenuTitleStyle = {
-  fontSize: 28,
-  fontWeight: 700,
-  marginBottom: 16,
-};
-
-const largeWhitePanelStyle = {
-  border: "2px solid #d1d5db",
-  background: "#ffffff",
-  minHeight: "calc(100vh - 210px)",
-  padding: 16,
-  boxSizing: "border-box" as const,
-};
-
-const emptyPanelMessageStyle = {
-  minHeight: "calc(100vh - 270px)",
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "center",
-  color: "#6b7280",
-  fontSize: 20,
-  textAlign: "center" as const,
-  padding: 24,
-};
-
-const bottomButtonsWrapStyle = {
-  display: "grid",
-  gridTemplateColumns: "1fr 1fr 1fr",
-  gap: 12,
-  marginTop: 18,
-};
-
-const displayButtonStyle = {
-  height: 64,
-  border: "none",
-  background: "#16a34a",
-  color: "#ffffff",
-  fontWeight: 700,
-  fontSize: 18,
-  cursor: "pointer",
-};
-
-const selectButtonStyle = {
-  height: 64,
-  border: "none",
-  background: "#1d4ed8",
-  color: "#ffffff",
-  fontWeight: 700,
-  fontSize: 18,
-  cursor: "pointer",
-};
-
-const exitButtonStyle = {
-  height: 64,
-  border: "none",
-  background: "#b91c1c",
-  color: "#ffffff",
-  fontWeight: 700,
-  fontSize: 18,
-  cursor: "pointer",
-};
-
-const lineupSectionStyle = {
-  display: "flex",
-  flexDirection: "column" as const,
-  gap: 16,
-};
-
-const lineupHeaderRowStyle = {
-  display: "flex",
-  justifyContent: "space-between",
-  alignItems: "center",
-  gap: 12,
-  flexWrap: "wrap" as const,
-};
-
-const lineupSectionTitleStyle = {
-  fontSize: 22,
-  fontWeight: 700,
-};
-
-const lineupHintStyle = {
-  fontSize: 14,
-  color: "#4b5563",
-};
-
-const lineupContentWrapStyle = {
-  display: "grid",
-  gridTemplateColumns: "minmax(0, 1fr) minmax(0, 360px)",
-  gap: 16,
-  alignItems: "start",
-};
-
-const lineupListStyle = {
-  display: "grid",
-  gap: 12,
-  maxHeight: "calc(100vh - 330px)",
-  minHeight: 260,
-  overflowY: "auto" as const,
-  overflowX: "hidden" as const,
-  paddingRight: 4,
-  minWidth: 0,
-  alignContent: "start" as const,
-};
-
-const lineupItemStyle = {
-  textAlign: "left" as const,
-  padding: 16,
-  cursor: "pointer",
-  minHeight: 106,
-  width: "100%",
-  boxSizing: "border-box" as const,
-};
-const lineupTopRowStyle = {
-  display: "flex",
-  justifyContent: "space-between",
-  alignItems: "center",
-  gap: 12,
-};
-
-const lineupMainCodeStyle = {
-  fontWeight: 700,
-  fontSize: 18,
-  wordBreak: "break-word" as const,
-};
-
-const lineupSeqStyle = {
-  fontSize: 13,
-  fontWeight: 700,
-  opacity: 0.9,
-};
-
-const lineupDescriptionStyle = {
-  fontSize: 15,
-  marginTop: 6,
-  marginBottom: 10,
-  lineHeight: 1.35,
-  wordBreak: "break-word" as const,
-};
-
-const lineupMetaGridStyle = {
-  display: "grid",
-  gridTemplateColumns: "1fr 1fr",
-  gap: 14,
-};
-
-const lineMetaWrapStyle = {
-  display: "flex",
-  justifyContent: "space-between",
-  alignItems: "center",
-  gap: 10,
-};
-
-const lineMetaLabelStyle = {
-  fontSize: 12,
-  fontWeight: 700,
-  opacity: 0.85,
-};
-
-const lineMetaValueStyle = {
-  fontSize: 14,
-  fontWeight: 700,
-};
-
-const selectedPreviewBoxStyle = {
-  border: "2px solid #cbd5e1",
-  background: "#f3f4f6",
-  padding: 14,
-  minWidth: 0,
-  alignSelf: "start" as const,
-};
-
-const selectedPreviewTitleStyle = {
-  fontSize: 18,
-  fontWeight: 700,
-  marginBottom: 12,
-};
-
-const primaryActionStyle = {
-  width: "100%",
-  minWidth: 0,
-  height: 62,
-  border: "none",
-  background: "#16a34a",
-  color: "#ffffff",
-  fontWeight: 700,
-  fontSize: 16,
-  cursor: "pointer",
-  padding: "0 18px",
-};
-
-const iconBarStyle = {
-  display: "flex",
-  gap: 6,
-  alignItems: "stretch",
-  flexWrap: "wrap" as const,
-};
-
-const iconCardButtonStyle = {
-  width: 76,
-  minHeight: 60,
-  background: "#f8fafc",
+const loginInputStyle = {
+  minHeight: 46,
   border: "1px solid #cbd5e1",
-  display: "flex",
-  flexDirection: "column" as const,
-  overflow: "hidden",
-  padding: 0,
-  cursor: "pointer",
-  touchAction: "manipulation" as const,
+  background: "#ffffff",
+  borderRadius: 14,
+  padding: "0 12px",
+  fontSize: 16,
+  color: "#111827",
+  outline: "none",
+  minWidth: 0,
 };
 
-const iconTitleStyle = {
-  color: "#dc2626",
-  fontSize: 10,
-  fontWeight: 700,
-  textAlign: "center" as const,
-  paddingTop: 2,
-  lineHeight: 1,
-};
-
-const iconBodyStyle = {
-  flex: 1,
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "center",
-  gap: 5,
-  padding: "2px 4px 4px",
-  boxSizing: "border-box" as const,
-};
-
-const personStickStyle = {
-  width: 14,
-  height: 24,
-  position: "relative" as const,
-  background:
-    "linear-gradient(to bottom, #111827 0 6px, transparent 6px 100%), linear-gradient(to right, transparent 5px, #111827 5px 9px, transparent 9px), linear-gradient(135deg, transparent 0 44%, #111827 44% 56%, transparent 56%), linear-gradient(225deg, transparent 0 44%, #111827 44% 56%, transparent 56%)",
-  borderRadius: 1,
-};
-
-const brownBoxStyle = {
-  width: 12,
-  height: 10,
-  background: "#a16207",
-  border: "1px solid #78350f",
-};
-
-const miniLineStyle = {
-  position: "absolute" as const,
-  left: 4,
-  right: 4,
-  top: 4,
-  height: 2,
-  background: "#94a3b8",
-};
-
-const topInfoWrap = {
-  border: "1px solid #7f8796",
-  padding: 10,
-  background: "#505566",
-  boxSizing: "border-box" as const,
-};
-
-const externalInfoGridStyle = {
+const mobileAppShellStyle = {
+  width: "100%",
+  maxWidth: 560,
+  margin: "0 auto",
   display: "grid",
-  gridTemplateColumns: "220px minmax(0, 1fr) 130px",
-  gap: 10,
-  alignItems: "center",
-  marginBottom: 6,
+  gap: 12,
+  minWidth: 0,
 };
 
-const fixtureIdStyle = {
-  textAlign: "right" as const,
-  color: "#d1d5db",
-  fontSize: 13,
+const mobileTopHeaderStyle = {
+  background: "linear-gradient(180deg, #7c8598 0%, #6d7688 100%)",
+  border: "1px solid #7e8797",
+  borderRadius: 20,
+  padding: 14,
+  color: "#ffffff",
+  boxShadow: "0 12px 24px rgba(0,0,0,0.22)",
+  minWidth: 0,
 };
 
-const yellowTextSmall = {
-  color: "#f8d34b",
-  fontSize: 22,
-  fontWeight: 700,
-  wordBreak: "break-word" as const,
-};
-
-const yellowTextLarge = {
-  color: "#f8d34b",
-  fontSize: 25,
-  fontWeight: 700,
+const mobileTopHeaderTitleStyle = {
+  fontSize: "clamp(18px, 5vw, 22px)",
+  fontWeight: 900,
   lineHeight: 1.1,
   wordBreak: "break-word" as const,
 };
 
-const changePackBtn = {
-  width: "100%",
-  height: 40,
-  border: "1px solid #cbd5e1",
-  background: "#f8fafc",
-  color: "#4b5563",
-  fontSize: 16,
-  fontWeight: 700,
-  cursor: "pointer",
-};
-
-const generalInfoGridStyle = {
-  display: "grid",
-  gridTemplateColumns: "1.1fr 1fr 0.8fr 0.8fr 240px",
-  gap: 12,
-  alignItems: "start",
-};
-
-const hmiSectionStyle = {
-  width: "100%",
-  maxWidth: 1100,
-  background: "#4a4f5f",
-  color: "#ffffff",
-  border: "2px solid #707786",
-  boxShadow: "0 10px 30px rgba(0,0,0,0.35)",
-  padding: 10,
-  boxSizing: "border-box" as const,
-  position: "relative" as const,
-  overflow: "hidden" as const,
-};
-
-const hmiTopHeaderStyle = {
-  display: "flex",
-  justifyContent: "space-between",
-  alignItems: "flex-start",
-  marginBottom: 8,
-  gap: 12,
-};
-
-const hmiTitleStyle = {
-  fontSize: 40,
-  fontWeight: 700,
-  letterSpacing: 1,
-  lineHeight: 1,
-  marginBottom: 8,
-};
-
-const hmiMainGridStyle = {
-  marginTop: 10,
-  display: "grid",
-  gridTemplateColumns: "280px minmax(0, 1fr) 280px",
-  gap: 10,
-  alignItems: "stretch",
-  minHeight: 0,
-};
-
-const hmiActionsGridStyle = {
-  display: "grid",
-  gridTemplateColumns: "1fr 1fr",
-  gap: 8,
-  height: "100%",
-  gridAutoRows: "1fr",
-  minHeight: 0,
-};
-
-const panelBox = {
-  border: "1px solid #7f8796",
-  background: "#505566",
-  padding: 8,
-  boxSizing: "border-box" as const,
-  height: "100%",
-  minHeight: 0,
-  display: "flex",
-  flexDirection: "column" as const,
-};
-
-const productionPanelGridStyle = {
-  display: "grid",
-  gridTemplateColumns: "1fr 1fr",
-  gap: 8,
-  alignItems: "stretch",
-  flex: 1,
-  minHeight: 0,
-};
-
-const containerColumnStyle = {
-  display: "flex",
-  flexDirection: "column" as const,
-  minHeight: 0,
-};
-
-const productionColumnStyle = {
-  display: "flex",
-  flexDirection: "column" as const,
-  minHeight: 0,
-};
-
-const rightPanelStyle = {
-  border: "1px solid #7f8796",
-  background: "#505566",
-  padding: 10,
-  color: "#d1d5db",
-  fontSize: 13,
-  height: "100%",
-  minHeight: 0,
-  display: "grid",
-  gridTemplateRows: "auto 1fr auto",
-  gap: 10,
-  boxSizing: "border-box" as const,
-  overflow: "hidden" as const,
-};
-
-const rightPanelMetaWrapStyle = {
-  display: "grid",
-  gap: 6,
-  alignContent: "start",
-  paddingTop: 4,
-};
-
-const rightPanelSpacerStyle = {
-  minHeight: 0,
-};
-
-const rightPanelButtonWrapStyle = {
-  display: "flex",
-  alignItems: "end",
-};
-
-const rightInfoTextStyle = {
-  fontSize: 14,
-  color: "#f3f4f6",
-  fontWeight: 700,
-  lineHeight: 1.3,
-  textAlign: "center" as const,
-};
-
-const actionBase = {
-  minHeight: 72,
-  border: "none",
-  fontSize: 20,
-  fontWeight: 700,
-  cursor: "pointer",
-  color: "#ffffff",
-  lineHeight: 1.05,
-  touchAction: "manipulation" as const,
-};
-
-const greenBtn = {
-  ...actionBase,
-  background: "#2ea84a",
-};
-
-const yellowBtn = {
-  ...actionBase,
-  background: "#e5c44a",
-  color: "#111827",
-};
-
-const blueBtn = {
-  ...actionBase,
-  background: "#1d4ed8",
-};
-
-const redBtn = {
-  ...actionBase,
-  background: "#8b1e2d",
-};
-
-const scanTestBtn = {
-  ...actionBase,
-  background: "#0f766e",
-  gridColumn: "1 / span 2",
-  minHeight: 56,
-  fontSize: 17,
-};
-
-const counterLabel = {
-  background: "#505566",
-  color: "#e5e7eb",
+const mobileTopHeaderMetaStyle = {
+  marginTop: 6,
   fontSize: 12,
   fontWeight: 700,
-  padding: "4px 6px",
-  border: "1px solid #8d95a4",
-  textAlign: "center" as const,
+  color: "#e5e7eb",
 };
 
-const counterValue = {
-  background: "#f8fafc",
-  color: "#111827",
-  fontSize: 30,
+const mobileTopHeaderSubMetaStyle = {
+  marginTop: 6,
+  fontSize: 11,
   fontWeight: 700,
-  height: 64,
-  border: "1px solid #9ca3af",
+  color: "#dbeafe",
+};
+
+const mobileDescriptionCardStyle = {
+  background: "linear-gradient(180deg, #5b6374 0%, #4d5567 100%)",
+  border: "1px solid #6b7280",
+  borderRadius: 20,
+  padding: 14,
+  color: "#ffffff",
+  boxShadow: "0 12px 24px rgba(0,0,0,0.24)",
+  minWidth: 0,
+};
+
+const mobileDescriptionLabelStyle = {
+  fontSize: 11,
+  fontWeight: 800,
+  color: "#cbd5e1",
+  letterSpacing: 0.4,
+};
+
+const mobileDescriptionValueStyle = {
+  marginTop: 8,
+  fontSize: "clamp(17px, 5vw, 22px)",
+  fontWeight: 900,
+  color: "#fde047",
+  lineHeight: 1.2,
+  wordBreak: "break-word" as const,
+};
+
+const mobileDescriptionMetaRowStyle = {
+  marginTop: 12,
+  display: "flex",
+  flexWrap: "wrap" as const,
+  gap: 8,
+  minWidth: 0,
+};
+
+const mobileDescriptionMetaPillStyle = {
+  background: "rgba(255,255,255,0.12)",
+  border: "1px solid rgba(255,255,255,0.14)",
+  borderRadius: 999,
+  padding: "8px 12px",
+  fontSize: 12,
+  fontWeight: 800,
+  color: "#ffffff",
+  wordBreak: "break-word" as const,
+  maxWidth: "100%",
+};
+
+const mobileCardStyle = {
+  background: "#e5e7eb",
+  border: "1px solid #cbd5e1",
+  borderRadius: 20,
+  padding: 14,
+  boxShadow: "0 10px 22px rgba(15,23,42,0.14)",
+  minWidth: 0,
+};
+
+const mobileSectionTitleStyle = {
+  fontSize: 15,
+  fontWeight: 900,
+  color: "#0f172a",
+  marginBottom: 10,
+  letterSpacing: 0.3,
+};
+
+const mobileCardHeaderRowStyle = {
+  display: "flex",
+  justifyContent: "space-between",
+  alignItems: "center",
+  gap: 10,
+  marginBottom: 10,
+  minWidth: 0,
+};
+
+const mobileStatusPillStyle = {
+  minWidth: 92,
+  minHeight: 34,
+  padding: "0 12px",
+  borderRadius: 999,
   display: "flex",
   alignItems: "center",
   justifyContent: "center",
+  color: "#ffffff",
+  fontWeight: 900,
+  fontSize: 12,
+  flexShrink: 0,
 };
 
-const serialListBox = {
+const mobileDetailGridStyle = {
+  display: "grid",
+  gap: 0,
+  minWidth: 0,
+};
+
+const mobileInputGridStyle = {
+  display: "grid",
+  gridTemplateColumns: "repeat(auto-fit, minmax(145px, 1fr))",
+  gap: 12,
+  minWidth: 0,
+};
+
+const mobileFieldLabelStyle = {
+  fontSize: 11,
+  fontWeight: 800,
+  color: "#334155",
+  marginBottom: 5,
+  textAlign: "center" as const,
+};
+
+const mobileFieldValueStyle = {
+  width: "100%",
+  minHeight: 44,
+  border: "1px solid #cbd5e1",
   background: "#f8fafc",
-  border: "1px solid #9ca3af",
-  color: "#111827",
-  flex: 1,
-  minHeight: 150,
-  padding: "8px 10px",
-  fontFamily: "Consolas, monospace",
-  fontSize: 15,
-  lineHeight: 1.35,
-  boxSizing: "border-box" as const,
-  overflowY: "auto" as const,
-  textAlign: "left" as const,
-};
-
-const emptySerialStyle = {
-  color: "#6b7280",
-  fontFamily: "Arial, sans-serif",
-  fontSize: 15,
-};
-
-const messageBarStyle = {
-  marginTop: 8,
-  border: "1px solid #8992a3",
-  background: "#d1d5db",
+  borderRadius: 14,
+  padding: "0 12px",
+  display: "flex",
   color: "#111827",
   fontSize: 14,
-  padding: "8px 12px",
   fontWeight: 700,
-  textAlign: "left" as const,
+  wordBreak: "break-word" as const,
+  minWidth: 0,
+};
+
+const mobileInputStyle = {
+  width: "100%",
+  minHeight: 46,
+  border: "1px solid #cbd5e1",
+  background: "#ffffff",
+  borderRadius: 14,
+  padding: "0 12px",
+  fontSize: 16,
+  fontWeight: 700,
+  color: "#111827",
+  outline: "none",
+  minWidth: 0,
+};
+
+const mobileScanTextareaStyle = {
+  width: "100%",
+  minHeight: 72,
+  resize: "none" as const,
+  background: "#f8fafc",
+  color: "#111827",
+  border: "1px solid #9ca3af",
+  borderRadius: 16,
+  padding: 12,
+  fontSize: 14,
+  fontWeight: 800,
+  boxSizing: "border-box" as const,
+  marginTop: 10,
+  opacity: 0.92,
+  pointerEvents: "none" as const,
+};
+
+const mobileButtonGridTwoStyle = {
+  display: "grid",
+  gridTemplateColumns: "repeat(auto-fit, minmax(145px, 1fr))",
+  gap: 10,
+  minWidth: 0,
+};
+
+const mobileButtonGridScanStyle = {
+  display: "grid",
+  gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
+  gap: 8,
+  marginTop: 12,
+  minWidth: 0,
+};
+
+const baseButtonStyle = {
+  minHeight: 54,
+  border: "none",
+  borderRadius: 16,
+  fontWeight: 950,
+  fontSize: 14,
+  cursor: "pointer",
+  boxShadow: "0 10px 18px rgba(0,0,0,0.18)",
+  minWidth: 0,
+  padding: "0 8px",
+  whiteSpace: "normal" as const,
+};
+
+const primaryButtonStyle = {
+  ...baseButtonStyle,
+  background: "linear-gradient(180deg, #4ade80 0%, #16a34a 100%)",
+  color: "#ffffff",
+};
+
+const secondaryButtonStyle = {
+  ...baseButtonStyle,
+  background: "linear-gradient(180deg, #8b5cf6 0%, #6d28d9 100%)",
+  color: "#ffffff",
+};
+
+const blueButtonStyle = {
+  ...baseButtonStyle,
+  background: "linear-gradient(180deg, #3b82f6 0%, #1d4ed8 100%)",
+  color: "#ffffff",
+};
+
+const warningButtonStyle = {
+  ...baseButtonStyle,
+  background: "linear-gradient(180deg, #fde047 0%, #eab308 100%)",
+  color: "#111827",
+};
+
+const dangerButtonStyle = {
+  ...baseButtonStyle,
+  background: "linear-gradient(180deg, #ef4444 0%, #b91c1c 100%)",
+  color: "#ffffff",
+};
+const scannerBigButtonStyle = {
+  width: "100%",
+  minHeight: 66,
+  border: "none",
+  borderRadius: 18,
+  marginTop: 12,
+  background: "linear-gradient(180deg, #38bdf8 0%, #1d4ed8 100%)",
+  color: "#ffffff",
+  fontSize: 20,
+  fontWeight: 950,
+  letterSpacing: 0.8,
+  cursor: "pointer",
+  boxShadow: "0 14px 24px rgba(29,78,216,0.34)",
+};
+
+const mobileOperatorActionGridStyle = {
+  display: "grid",
+  gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+  gap: 10,
+  marginTop: 10,
+  minWidth: 0,
+};
+const mobileHistoryListStyle = {
+  display: "grid",
+  gap: 8,
+  maxHeight: 210,
+  overflowY: "auto" as const,
+  paddingRight: 2,
+};
+
+const mobileHistoryItemStyle = {
+  borderRadius: 14,
+  padding: "11px 12px",
+  fontSize: 14,
+  fontWeight: 900,
+  lineHeight: 1.45,
   wordBreak: "break-word" as const,
 };
 
-const footerTagsGridStyle = {
-  marginTop: 4,
+const mobileHistoryEmptyStyle = {
+  background: "#f8fafc",
+  border: "1px dashed #cbd5e1",
+  borderRadius: 14,
+  padding: "14px 12px",
+  fontSize: 13,
+  color: "#475569",
+  fontWeight: 700,
+  textAlign: "center" as const,
+};
+
+const mobileStatGridStyle = {
   display: "grid",
-  gridTemplateColumns: "repeat(8, minmax(0, 1fr))",
+  gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+  gap: 9,
+  minWidth: 0,
+};
+const mobileStatCardStyle = {
+  background: "#374151",
+  border: "1px solid #4b5563",
+  borderRadius: 16,
+  padding: "11px 8px",
+  minWidth: 0,
+  textAlign: "center" as const,
+};
+
+const mobileStatLabelStyle = {
+  fontSize: 10,
+  fontWeight: 800,
+  color: "#d1d5db",
+  marginBottom: 6,
+  letterSpacing: 0.3,
+};
+
+const mobileStatValueStyle = {
+  fontSize: "clamp(20px, 6vw, 25px)",
+  fontWeight: 950,
+  lineHeight: 1,
+  wordBreak: "break-word" as const,
+};
+
+const mobileInfoStripStyle = {
+  marginTop: 12,
+  display: "grid",
   gap: 8,
 };
 
-const footerLabelStyle = {
-  color: "#d1d5db",
-  fontSize: 10,
-  fontWeight: 700,
-  marginBottom: 2,
+const mobileInfoStripItemStyle = {
+  background: "#f8fafc",
+  border: "1px solid #cbd5e1",
+  borderRadius: 14,
+  padding: "10px 12px",
+  display: "grid",
+  gap: 4,
+  minWidth: 0,
 };
 
-const footerValueStyle = {
-  color: "#ffffff",
-  fontSize: 12,
-  fontWeight: 700,
-  minHeight: 16,
+const mobileInfoStripLabelStyle = {
+  fontSize: 10,
+  fontWeight: 800,
+  color: "#64748b",
+};
+
+const mobileInfoStripValueStyle = {
+  fontSize: 13,
+  fontWeight: 800,
+  color: "#0f172a",
   wordBreak: "break-word" as const,
+};
+
+const mobileMetaGridStyle = {
+  display: "grid",
+  gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+  gap: 10,
+  minWidth: 0,
+};
+
+const mobileMetaCardStyle = {
+  background: "#374151",
+  border: "1px solid #4b5563",
+  borderRadius: 16,
+  padding: 12,
+  color: "#ffffff",
+  minWidth: 0,
+};
+
+const mobileMetaCardLabelStyle = {
+  fontSize: 10,
+  fontWeight: 800,
+  color: "#cbd5e1",
+  marginBottom: 4,
+};
+
+const mobileMetaCardValueStyle = {
+  fontSize: 13,
+  fontWeight: 800,
+  color: "#ffffff",
+  wordBreak: "break-word" as const,
+};
+
+const mobileMessageBarStyle = {
+  border: "1px solid #cbd5e1",
+  background: "#e2e8f0",
+  color: "#111827",
+  borderRadius: 14,
+  padding: "10px 12px",
+  fontSize: 13,
+  fontWeight: 800,
+  lineHeight: 1.4,
+  wordBreak: "break-word" as const,
+  minWidth: 0,
 };
 
 const modalOverlayStyle = {
@@ -2778,379 +2050,100 @@ const modalOverlayStyle = {
   display: "flex",
   alignItems: "center",
   justifyContent: "center",
-  padding: 18,
+  padding: 12,
   zIndex: 999,
 };
 
-const modalPanelStyle = {
-  width: "min(760px, 92vw)",
-  background: "#505566",
-  border: "2px solid #8790a1",
-  boxShadow: "0 18px 48px rgba(0,0,0,0.4)",
-  padding: 22,
+const cameraModalPanelStyle = {
+  width: "min(96vw, 560px)",
+  maxHeight: "92vh",
+  overflowY: "auto" as const,
+  background: "#111827",
+  border: "2px solid #334155",
+  boxShadow: "0 18px 48px rgba(0,0,0,0.45)",
+  padding: 14,
   boxSizing: "border-box" as const,
+  borderRadius: 18,
 };
 
-const modalTitleStyle = {
-  fontSize: 26,
-  fontWeight: 700,
+const cameraModalHeaderStyle = {
   color: "#ffffff",
-  marginBottom: 14,
+  fontSize: 20,
+  fontWeight: 800,
+  marginBottom: 10,
+  textAlign: "center" as const,
 };
 
-const modalMetaInfoStyle = {
-  display: "grid",
-  gap: 4,
-  color: "#d1d5db",
-  fontSize: 14,
-  marginBottom: 14,
-  fontWeight: 700,
-};
-
-const modalInputLabelStyle = {
+const cameraHelperTextStyle = {
+  color: "#cbd5e1",
   fontSize: 13,
-  color: "#d1d5db",
   fontWeight: 700,
-  marginBottom: 8,
+  marginBottom: 10,
+  textAlign: "center" as const,
 };
 
-const modalTextareaStyle = {
+const cameraVideoWrapStyle = {
   width: "100%",
-  minHeight: 180,
-  resize: "vertical" as const,
+  background: "#000000",
+  border: "1px solid #475569",
+  overflow: "hidden" as const,
+  borderRadius: 14,
+};
+
+const cameraVideoStyle = {
+  width: "100%",
+  display: "block",
+  aspectRatio: "4 / 5",
+  objectFit: "cover" as const,
+};
+
+const cameraStatusStyle = {
+  color: "#e5e7eb",
+  fontSize: 13,
+  fontWeight: 700,
+  textAlign: "center" as const,
+  marginTop: 10,
+};
+
+const cameraManualInputStyle = {
+  marginTop: 12,
+  width: "100%",
+  minHeight: 88,
+  resize: "none" as const,
   background: "#f8fafc",
   color: "#111827",
-  border: "2px solid #cbd5e1",
-  padding: 14,
-  fontSize: 16,
+  border: "1px solid #9ca3af",
+  padding: 10,
+  fontSize: 15,
   boxSizing: "border-box" as const,
-  outline: "none",
+  borderRadius: 14,
 };
 
 const modalButtonsRowStyle = {
-  display: "flex",
-  justifyContent: "flex-end",
+  display: "grid",
+  gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))",
   gap: 12,
-  flexWrap: "wrap" as const,
   marginTop: 18,
 };
 
 const modalSubmitButtonStyle = {
-  minWidth: 150,
-  height: 54,
+  minHeight: 54,
   border: "none",
-  background: "#16a34a",
+  borderRadius: 16,
+  background: "linear-gradient(180deg, #16a34a 0%, #15803d 100%)",
   color: "#ffffff",
   fontSize: 16,
-  fontWeight: 700,
+  fontWeight: 800,
   cursor: "pointer",
 };
 
 const modalCancelButtonStyle = {
-  minWidth: 150,
-  height: 54,
+  minHeight: 54,
   border: "none",
-  background: "#8b1e2d",
+  borderRadius: 16,
+  background: "linear-gradient(180deg, #ef4444 0%, #b91c1c 100%)",
   color: "#ffffff",
   fontSize: 16,
-  fontWeight: 700,
+  fontWeight: 800,
   cursor: "pointer",
-};
-
-const reportMetaStyle = {
-  display: "flex",
-  gap: 18,
-  flexWrap: "wrap" as const,
-  color: "#d1d5db",
-  fontSize: 14,
-  fontWeight: 700,
-  marginBottom: 14,
-};
-
-const reportsListStyle = {
-  maxHeight: 420,
-  overflowY: "auto" as const,
-  display: "grid",
-  gap: 10,
-};
-
-const reportEmptyStyle = {
-  background: "#e5e7eb",
-  color: "#111827",
-  padding: 18,
-  fontSize: 16,
-  fontWeight: 700,
-};
-
-const reportRowStyle = {
-  padding: 12,
-  color: "#ffffff",
-};
-
-const reportRowTopStyle = {
-  display: "flex",
-  justifyContent: "space-between",
-  gap: 12,
-  marginBottom: 6,
-  flexWrap: "wrap" as const,
-};
-
-const reportSeqStyle = {
-  fontSize: 13,
-  fontWeight: 700,
-};
-
-const reportQtyStyle = {
-  fontSize: 13,
-  fontWeight: 700,
-};
-
-const reportPartStyle = {
-  fontSize: 18,
-  fontWeight: 700,
-  marginBottom: 4,
-  wordBreak: "break-word" as const,
-};
-
-const reportDescStyle = {
-  fontSize: 14,
-  lineHeight: 1.35,
-  wordBreak: "break-word" as const,
-};
-
-const downtimeScreenShellStyle = {
-  width: "100%",
-  maxWidth: 1400,
-};
-
-const downtimeScaleSpacerStyle = {
-  width: "100%",
-  transform: "scale(1)",
-  transformOrigin: "top center",
-};
-
-const downtimeFrameStyle = {
-  width: "100%",
-  minHeight: "auto",
-  background: "#d8deea",
-  border: "2px solid #7b8799",
-  boxSizing: "border-box" as const,
-  overflow: "hidden",
-};
-
-const downtimeYellowHeaderStyle = {
-  background: "#f1ea45",
-  minHeight: 100,
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "space-between",
-  padding: "0 18px",
-  gap: 12,
-  boxSizing: "border-box" as const,
-  flexWrap: "wrap" as const,
-};
-
-const downtimeHeaderTitleStyle = {
-  fontSize: 34,
-  fontWeight: 500,
-  color: "#1f2937",
-  letterSpacing: 0.4,
-};
-
-const downtimeClockWrapStyle = {
-  minWidth: 280,
-  background: "rgba(255,255,255,0.18)",
-  border: "1px solid rgba(0,0,0,0.1)",
-  padding: "8px 12px",
-  textAlign: "center" as const,
-};
-
-const downtimeClockValueStyle = {
-  fontSize: 52,
-  lineHeight: 1,
-  color: "#1f2937",
-  fontWeight: 500,
-};
-
-const downtimeClockMetaStyle = {
-  marginTop: 4,
-  fontSize: 11,
-  color: "#374151",
-  fontWeight: 700,
-};
-
-const downtimeInnerBodyStyle = {
-  padding: 12,
-  background: "#d8deea",
-  boxSizing: "border-box" as const,
-};
-
-const downtimeColumnHeadersStyle = {
-  display: "grid",
-  gridTemplateColumns: "1fr 1fr 1fr",
-  gap: 0,
-  marginBottom: 0,
-};
-
-const downtimeColumnHeaderCellStyle = {
-  background: "#d8deea",
-  color: "#3f4b5f",
-  textAlign: "center" as const,
-  fontSize: 24,
-  fontWeight: 700,
-  padding: "10px 8px",
-  borderLeft: "1px solid #b7c0d0",
-  borderRight: "1px solid #b7c0d0",
-};
-
-const downtimeColumnsGridStyle = {
-  display: "grid",
-  gridTemplateColumns: "1fr 1fr 1fr",
-  gap: 0,
-  minHeight: "auto",
-};
-
-const downtimeListColumnStyle = {
-  background: "#ffffff",
-  border: "1px solid #b7c0d0",
-  display: "flex",
-  flexDirection: "column" as const,
-  padding: 8,
-};
-
-const downtimeListButtonStyle = {
-  border: "none",
-  background: "#ffffff",
-  color: "#1f2937",
-  fontSize: 18,
-  lineHeight: 1.2,
-  textAlign: "left" as const,
-  padding: "6px 8px",
-  cursor: "pointer",
-};
-
-const downtimeExplanationWrapStyle = {
-  marginTop: 10,
-};
-
-const downtimeExplanationTitleStyle = {
-  fontSize: 24,
-  color: "#3f4b5f",
-  fontWeight: 700,
-  marginBottom: 6,
-  textAlign: "center" as const,
-};
-
-const downtimeExplanationInputStyle = {
-  width: "100%",
-  minHeight: 74,
-  background: "#ffffff",
-  border: "1px solid #b7c0d0",
-  resize: "none" as const,
-  boxSizing: "border-box" as const,
-  padding: 10,
-  fontSize: 16,
-  outline: "none",
-};
-
-const downtimeBottomBarStyle = {
-  marginTop: 12,
-  display: "flex",
-  justifyContent: "space-between",
-  alignItems: "end",
-  gap: 12,
-};
-
-const downtimeIconsWrapStyle = {
-  display: "flex",
-  gap: 8,
-  flexWrap: "wrap" as const,
-};
-
-const downtimeToolIconButtonStyle = {
-  width: 74,
-  height: 74,
-  border: "1px solid #9aa6bb",
-  background: "#f8fafc",
-  display: "flex",
-  flexDirection: "column" as const,
-  alignItems: "center",
-  justifyContent: "center",
-  cursor: "pointer",
-};
-
-const downtimeToolIconEmojiStyle = {
-  fontSize: 26,
-  lineHeight: 1,
-};
-
-const downtimeToolIconLabelStyle = {
-  marginTop: 4,
-  fontSize: 11,
-  color: "#334155",
-  fontWeight: 700,
-};
-
-const downtimeActionButtonsWrapStyle = {
-  display: "flex",
-  gap: 12,
-  flexWrap: "wrap" as const,
-  alignItems: "end",
-};
-
-const downtimeBlueActionStyle = {
-  minWidth: 190,
-  height: 68,
-  border: "none",
-  background: "#2347f4",
-  color: "#ffffff",
-  fontSize: 24,
-  fontWeight: 700,
-  cursor: "pointer",
-};
-
-const downtimeStartActionStyle = {
-  minWidth: 190,
-  height: 68,
-  border: "none",
-  background: "#16a34a",
-  color: "#ffffff",
-  fontSize: 24,
-  fontWeight: 700,
-  cursor: "pointer",
-};
-
-const downtimeResumeActionStyle = {
-  minWidth: 190,
-  height: 68,
-  border: "none",
-  background: "#58b748",
-  color: "#ffffff",
-  fontSize: 24,
-  fontWeight: 700,
-  cursor: "pointer",
-};
-
-const downtimeFooterMetaStyle = {
-  marginTop: 10,
-  textAlign: "right" as const,
-  color: "#475569",
-  fontSize: 14,
-  fontWeight: 700,
-};
-
-const pinchStageViewportStyle = {
-  width: "100%",
-  overflow: "auto" as const,
-  display: "flex",
-  justifyContent: "center",
-  alignItems: "flex-start",
-};
-
-const pinchStageContentStyle = {
-  width: "100%",
-  maxWidth: "1400px",
-  transformOrigin: "top center",
-  transition: "transform 0.04s linear",
-  willChange: "transform",
 };
