@@ -414,6 +414,8 @@ function buildCatalogFromRaw(raw: string): CatalogPart[] {
 
 const PART_CATALOG: CatalogPart[] = buildCatalogFromRaw(RAW_PART_CATALOG);
 
+type CameraScanMode = "labelPart" | "labelQty" | "partBarcode";
+
 function normalizeCatalogKey(value: string) {
   return String(value || "")
     .toUpperCase()
@@ -453,11 +455,13 @@ function extractQuantityFromScan(rawValue: string) {
     return keywordMatch[1];
   }
 
-  const allNumbers = cleaned.match(/\d{1,5}/g) || [];
+  const compact = cleaned.replace(/\s+/g, "");
 
-  if (allNumbers.length === 1) {
-    return allNumbers[0];
+  if (/^\d{1,5}$/.test(compact)) {
+    return compact;
   }
+
+  const allNumbers = compact.match(/\d{1,5}/g) || [];
 
   const reasonableQty = allNumbers
     .map((value) => Number(value))
@@ -542,6 +546,69 @@ function buildSessionMetrics(session: LabelSession): LabelSession {
     defectQty,
     remainingQty,
     status,
+  };
+}
+
+function getScanBoxByMode(scanMode: CameraScanMode) {
+  if (scanMode === "labelQty") {
+    return {
+      width: "34%",
+      height: "18%",
+      top: "41%",
+      left: "33%",
+    };
+  }
+
+  if (scanMode === "labelPart") {
+    return {
+      width: "76%",
+      height: "22%",
+      top: "24%",
+      left: "12%",
+    };
+  }
+
+  return {
+    width: "76%",
+    height: "24%",
+    top: "32%",
+    left: "12%",
+  };
+}
+
+function getVideoCropRect(videoWidth: number, videoHeight: number, scanMode: CameraScanMode) {
+  if (scanMode === "labelQty") {
+    const width = Math.round(videoWidth * 0.34);
+    const height = Math.round(videoHeight * 0.18);
+
+    return {
+      x: Math.round(videoWidth * 0.33),
+      y: Math.round(videoHeight * 0.41),
+      width,
+      height,
+    };
+  }
+
+  if (scanMode === "labelPart") {
+    const width = Math.round(videoWidth * 0.76);
+    const height = Math.round(videoHeight * 0.22);
+
+    return {
+      x: Math.round(videoWidth * 0.12),
+      y: Math.round(videoHeight * 0.24),
+      width,
+      height,
+    };
+  }
+
+  const width = Math.round(videoWidth * 0.76);
+  const height = Math.round(videoHeight * 0.24);
+
+  return {
+    x: Math.round(videoWidth * 0.12),
+    y: Math.round(videoHeight * 0.32),
+    width,
+    height,
   };
 }
 
@@ -655,7 +722,7 @@ export default function App() {
   const handleOpenDisplayPart = () => {
     setLabelDetailsDraft(null);
     setScanStage("labelCamera");
-    setMachineMessage("Step 1: scan the label part number.");
+    setMachineMessage("Step 1: scan the top Part No barcode.");
   };
 
   const handleLabelDetected = (value: string) => {
@@ -686,7 +753,7 @@ export default function App() {
     });
 
     setScanStage("labelQtyCamera");
-    setMachineMessage("Part number scanned. Step 2: scan Package Qty from the label.");
+    setMachineMessage("Part number scanned. Step 2: scan the Package Qty barcode.");
     pushAlert("success", "Label part number scanned successfully.");
   };
 
@@ -702,7 +769,7 @@ export default function App() {
 
     if (!qty || Number(qty) <= 0) {
       setScanStage("idle");
-      setMachineMessage("Package Qty could not be read. Enter it manually or scan again.");
+      setMachineMessage("Package Qty could not be read. Scan the Qty barcode again.");
       pushAlert("warning", "Package Qty was not detected.");
       return;
     }
@@ -712,13 +779,14 @@ export default function App() {
         ? {
             ...prev,
             packagingQty: qty,
+            skdQty: qty,
           }
         : prev
     );
 
     setScanStage("idle");
-    setMachineMessage("Package Qty scanned. Enter SKD Qty, then confirm.");
-    pushAlert("success", `Package Qty scanned: ${qty}.`);
+    setMachineMessage(`Package Qty scanned: ${qty}. Packaging Qty and SKD Qty are ready. Press CONFIRM.`);
+    pushAlert("success", `Package Qty and SKD Qty set to ${qty}.`);
   };
 
   const handleConfirmLabel = () => {
@@ -732,13 +800,13 @@ export default function App() {
     const skdQty = Number(labelDetailsDraft.skdQty || 0);
 
     if (!packagingQty || packagingQty <= 0) {
-      setMachineMessage("Please scan or enter a valid Packaging Qty.");
-      pushAlert("warning", "Packaging Qty is required.");
+      setMachineMessage("Please scan Package Qty before confirming.");
+      pushAlert("warning", "Package Qty scan is required.");
       return;
     }
 
     if (!skdQty || skdQty <= 0) {
-      setMachineMessage("Please enter a valid SKD Qty.");
+      setMachineMessage("SKD Qty was not set. Scan Package Qty again.");
       pushAlert("warning", "SKD Qty is required.");
       return;
     }
@@ -932,12 +1000,6 @@ export default function App() {
           machineMessage={machineMessage}
           catalogCount={catalogCount}
           labelDetailsDraft={labelDetailsDraft}
-          onPackagingQtyChange={(value) =>
-            setLabelDetailsDraft((prev) => (prev ? { ...prev, packagingQty: value } : prev))
-          }
-          onSkdQtyChange={(value) =>
-            setLabelDetailsDraft((prev) => (prev ? { ...prev, skdQty: value } : prev))
-          }
           onDisplayPart={handleOpenDisplayPart}
           onScanPackageQty={() => setScanStage("labelQtyCamera")}
           onConfirmLabel={handleConfirmLabel}
@@ -969,7 +1031,8 @@ export default function App() {
       <CameraScanModal
         isOpen={scanStage === "labelCamera"}
         title="SCAN LABEL PART #"
-        helperText="Step 1: scan or paste the label part number."
+        helperText="Align only the TOP Part No barcode inside the scan box."
+        scanMode="labelPart"
         onClose={() => setScanStage("idle")}
         onDetected={handleLabelDetected}
       />
@@ -977,7 +1040,8 @@ export default function App() {
       <CameraScanModal
         isOpen={scanStage === "labelQtyCamera"}
         title="SCAN PACKAGE QTY"
-        helperText="Step 2: scan the Package Qty barcode from the label. If it is printed text only, use manual input."
+        helperText="Align only the small Package Qty barcode inside the scan box."
+        scanMode="labelQty"
         onClose={() => setScanStage("idle")}
         onDetected={handleLabelQtyDetected}
       />
@@ -985,7 +1049,8 @@ export default function App() {
       <CameraScanModal
         isOpen={scanStage === "partCamera"}
         title="SCAN PART BARCODE"
-        helperText="Scan or paste the part barcode. The scan will be submitted automatically."
+        helperText="Align the part barcode inside the scan box."
+        scanMode="partBarcode"
         onClose={() => setScanStage("idle")}
         onDetected={(value) => {
           setScanStage("idle");
@@ -1000,15 +1065,20 @@ function CameraScanModal({
   isOpen,
   title,
   helperText,
+  scanMode,
   onClose,
   onDetected,
-}: CameraScanModalProps) {
+}: CameraScanModalProps & { scanMode: CameraScanMode }) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const scanTimerRef = useRef<number | null>(null);
   const detectedOnceRef = useRef(false);
+
   const [statusText, setStatusText] = useState("Starting camera...");
   const [manualValue, setManualValue] = useState("");
+
+  const scanBox = getScanBoxByMode(scanMode);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -1027,8 +1097,8 @@ function CameraScanModal({
         const stream = await navigator.mediaDevices.getUserMedia({
           video: {
             facingMode: { ideal: "environment" },
-            width: { ideal: 1280 },
-            height: { ideal: 720 },
+            width: { ideal: 1920 },
+            height: { ideal: 1080 },
           },
           audio: false,
         });
@@ -1046,7 +1116,7 @@ function CameraScanModal({
           window as unknown as {
             BarcodeDetector?: new (options?: unknown) => {
               detect: (
-                source: HTMLVideoElement
+                source: HTMLVideoElement | HTMLCanvasElement
               ) => Promise<Array<{ rawValue?: string }>>;
             };
           }
@@ -1061,12 +1131,38 @@ function CameraScanModal({
           formats: ["code_39", "code_128", "qr_code", "ean_13", "ean_8", "upc_a", "upc_e"],
         });
 
-        setStatusText("Point the camera at the barcode.");
+        setStatusText("Align barcode inside the red scan box.");
 
         scanTimerRef.current = window.setInterval(async () => {
           try {
-            if (!videoRef.current || detectedOnceRef.current) return;
-            const barcodes = await detector.detect(videoRef.current);
+            if (!videoRef.current || !canvasRef.current || detectedOnceRef.current) return;
+
+            const video = videoRef.current;
+            const canvas = canvasRef.current;
+
+            if (!video.videoWidth || !video.videoHeight) return;
+
+            const crop = getVideoCropRect(video.videoWidth, video.videoHeight, scanMode);
+
+            canvas.width = crop.width;
+            canvas.height = crop.height;
+
+            const ctx = canvas.getContext("2d");
+            if (!ctx) return;
+
+            ctx.drawImage(
+              video,
+              crop.x,
+              crop.y,
+              crop.width,
+              crop.height,
+              0,
+              0,
+              crop.width,
+              crop.height
+            );
+
+            const barcodes = await detector.detect(canvas);
             const rawValue = String(barcodes?.[0]?.rawValue || "").trim();
 
             if (rawValue && !detectedOnceRef.current) {
@@ -1077,7 +1173,7 @@ function CameraScanModal({
           } catch {
             // Ignore frame scan errors.
           }
-        }, 450);
+        }, 420);
       } catch {
         setStatusText("Camera access failed. Use manual input below.");
       }
@@ -1101,7 +1197,7 @@ function CameraScanModal({
       setManualValue("");
       detectedOnceRef.current = false;
     };
-  }, [isOpen, onDetected]);
+  }, [isOpen, onDetected, scanMode]);
 
   if (!isOpen) return null;
 
@@ -1113,14 +1209,38 @@ function CameraScanModal({
 
         <div style={cameraVideoWrapStyle}>
           <video ref={videoRef} style={cameraVideoStyle} playsInline muted autoPlay />
+
+          <div
+            style={{
+              ...cameraScanFrameStyle,
+              width: scanBox.width,
+              height: scanBox.height,
+              top: scanBox.top,
+              left: scanBox.left,
+            }}
+          >
+            <div style={cameraScanFrameLabelStyle}>
+              {scanMode === "labelPart"
+                ? "PART NO BARCODE"
+                : scanMode === "labelQty"
+                ? "PACKAGE QTY BARCODE"
+                : "PART BARCODE"}
+            </div>
+          </div>
         </div>
+
+        <canvas ref={canvasRef} style={{ display: "none" }} />
 
         <div style={cameraStatusStyle}>{statusText}</div>
 
         <textarea
           value={manualValue}
           onChange={(e) => setManualValue(e.target.value)}
-          placeholder="Paste barcode text here if camera is not available"
+          placeholder={
+            scanMode === "labelQty"
+              ? "Manual fallback: enter Package Qty, example 15"
+              : "Manual fallback: paste barcode text here"
+          }
           style={cameraManualInputStyle}
         />
 
@@ -1209,8 +1329,6 @@ function PartMenuScreen({
   machineMessage,
   catalogCount,
   labelDetailsDraft,
-  onPackagingQtyChange,
-  onSkdQtyChange,
   onDisplayPart,
   onScanPackageQty,
   onConfirmLabel,
@@ -1221,8 +1339,6 @@ function PartMenuScreen({
   machineMessage: string;
   catalogCount: number;
   labelDetailsDraft: LabelDetailsDraft | null;
-  onPackagingQtyChange: (value: string) => void;
-  onSkdQtyChange: (value: string) => void;
   onDisplayPart: () => void;
   onScanPackageQty: () => void;
   onConfirmLabel: () => void;
@@ -1260,10 +1376,10 @@ function PartMenuScreen({
             <div style={mobileFieldLabelStyle}>Packaging Qty</div>
             <input
               value={labelDetailsDraft?.packagingQty ?? ""}
-              onChange={(e) => onPackagingQtyChange(e.target.value)}
-              style={mobileInputStyle}
+              readOnly
+              style={readonlyMobileInputStyle}
               inputMode="numeric"
-              placeholder="Scan Package Qty"
+              placeholder="Scanned Package Qty"
             />
           </div>
 
@@ -1271,10 +1387,10 @@ function PartMenuScreen({
             <div style={mobileFieldLabelStyle}>SKD Qty</div>
             <input
               value={labelDetailsDraft?.skdQty ?? ""}
-              onChange={(e) => onSkdQtyChange(e.target.value)}
-              style={mobileInputStyle}
+              readOnly
+              style={readonlyMobileInputStyle}
               inputMode="numeric"
-              placeholder="SKD Qty"
+              placeholder="Auto SKD Qty"
             />
           </div>
         </div>
@@ -1294,7 +1410,7 @@ function PartMenuScreen({
           onClick={onScanPackageQty}
           disabled={!labelDetailsDraft}
         >
-          SCAN PKG QTY
+          SCAN QTY
         </button>
 
         <button style={secondaryButtonStyle} onClick={onConfirmLabel}>
@@ -1904,6 +2020,14 @@ const mobileInputStyle = {
   minWidth: 0,
 };
 
+const readonlyMobileInputStyle = {
+  ...mobileInputStyle,
+  background: "#f1f5f9",
+  color: "#0f172a",
+  border: "1px solid #94a3b8",
+  cursor: "default",
+};
+
 const mobileScanTextareaStyle = {
   width: "100%",
   minHeight: 72,
@@ -2170,6 +2294,7 @@ const cameraVideoWrapStyle = {
   border: "1px solid #475569",
   overflow: "hidden" as const,
   borderRadius: 14,
+  position: "relative" as const,
 };
 
 const cameraVideoStyle = {
@@ -2177,6 +2302,29 @@ const cameraVideoStyle = {
   display: "block",
   aspectRatio: "4 / 5",
   objectFit: "cover" as const,
+};
+
+const cameraScanFrameStyle = {
+  position: "absolute" as const,
+  border: "4px solid #ef4444",
+  borderRadius: 10,
+  boxShadow: "0 0 0 999px rgba(0,0,0,0.42), 0 0 22px rgba(239,68,68,0.72)",
+  zIndex: 4,
+  pointerEvents: "none" as const,
+};
+
+const cameraScanFrameLabelStyle = {
+  position: "absolute" as const,
+  left: 8,
+  top: -28,
+  background: "#ef4444",
+  color: "#ffffff",
+  borderRadius: 999,
+  padding: "5px 10px",
+  fontSize: 11,
+  fontWeight: 900,
+  letterSpacing: 0.5,
+  whiteSpace: "nowrap" as const,
 };
 
 const cameraStatusStyle = {
