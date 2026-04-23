@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { getStationConfig, loginOperator } from "./api/client";
 
 type AppScreen = "login" | "partMenu" | "hmi";
-type ScanStage = "idle" | "labelCamera" | "partCamera";
+type ScanStage = "idle" | "labelCamera" | "labelQtyCamera" | "partCamera";
 type ScanStatus = "idle" | "success" | "error";
 type AlertLevel = "info" | "success" | "warning" | "error";
 type SessionScanStatus = "active" | "defect";
@@ -442,6 +442,31 @@ function tryExtractPartNumber(rawValue: string) {
     .trim();
 }
 
+function extractQuantityFromScan(rawValue: string) {
+  const cleaned = String(rawValue || "").toUpperCase().trim();
+
+  const keywordMatch = cleaned.match(
+    /(?:QTY|QUANTITY|PACK|PKG|PACKAGE|COUNT)[^\d]*(\d{1,5})/
+  );
+
+  if (keywordMatch?.[1]) {
+    return keywordMatch[1];
+  }
+
+  const allNumbers = cleaned.match(/\d{1,5}/g) || [];
+
+  if (allNumbers.length === 1) {
+    return allNumbers[0];
+  }
+
+  const reasonableQty = allNumbers
+    .map((value) => Number(value))
+    .filter((value) => value > 0 && value <= 999)
+    .sort((a, b) => a - b)[0];
+
+  return reasonableQty ? String(reasonableQty) : "";
+}
+
 function findCatalogPartByLabelScan(rawValue: string) {
   const extracted = tryExtractPartNumber(rawValue);
   const normalizedExtracted = normalizeCatalogKey(extracted);
@@ -630,7 +655,7 @@ export default function App() {
   const handleOpenDisplayPart = () => {
     setLabelDetailsDraft(null);
     setScanStage("labelCamera");
-    setMachineMessage("Scan or paste the label part number.");
+    setMachineMessage("Step 1: scan the label part number.");
   };
 
   const handleLabelDetected = (value: string) => {
@@ -645,9 +670,10 @@ export default function App() {
         packagingQty: "",
         skdQty: "",
       });
-      setScanStage("idle");
-      setMachineMessage("Label scanned. No exact row found. Enter quantities and continue if needed.");
-      pushAlert("warning", "Catalog row not found for scanned label.");
+
+      setScanStage("labelQtyCamera");
+      setMachineMessage("Part number scanned, but catalog row was not found. Step 2: scan Package Qty.");
+      pushAlert("warning", "Catalog row not found. Scan Package Qty next.");
       return;
     }
 
@@ -658,9 +684,41 @@ export default function App() {
       packagingQty: "",
       skdQty: "",
     });
+
+    setScanStage("labelQtyCamera");
+    setMachineMessage("Part number scanned. Step 2: scan Package Qty from the label.");
+    pushAlert("success", "Label part number scanned successfully.");
+  };
+
+  const handleLabelQtyDetected = (value: string) => {
+    const qty = extractQuantityFromScan(value);
+
+    if (!labelDetailsDraft) {
+      setScanStage("idle");
+      setMachineMessage("Scan label part number first.");
+      pushAlert("warning", "Package Qty scan requires a label part first.");
+      return;
+    }
+
+    if (!qty || Number(qty) <= 0) {
+      setScanStage("idle");
+      setMachineMessage("Package Qty could not be read. Enter it manually or scan again.");
+      pushAlert("warning", "Package Qty was not detected.");
+      return;
+    }
+
+    setLabelDetailsDraft((prev) =>
+      prev
+        ? {
+            ...prev,
+            packagingQty: qty,
+          }
+        : prev
+    );
+
     setScanStage("idle");
-    setMachineMessage("Label scanned. Enter Packaging Qty and SKD Qty, then confirm.");
-    pushAlert("success", "Label scanned successfully.");
+    setMachineMessage("Package Qty scanned. Enter SKD Qty, then confirm.");
+    pushAlert("success", `Package Qty scanned: ${qty}.`);
   };
 
   const handleConfirmLabel = () => {
@@ -674,7 +732,7 @@ export default function App() {
     const skdQty = Number(labelDetailsDraft.skdQty || 0);
 
     if (!packagingQty || packagingQty <= 0) {
-      setMachineMessage("Please enter a valid Packaging Qty.");
+      setMachineMessage("Please scan or enter a valid Packaging Qty.");
       pushAlert("warning", "Packaging Qty is required.");
       return;
     }
@@ -881,6 +939,7 @@ export default function App() {
             setLabelDetailsDraft((prev) => (prev ? { ...prev, skdQty: value } : prev))
           }
           onDisplayPart={handleOpenDisplayPart}
+          onScanPackageQty={() => setScanStage("labelQtyCamera")}
           onConfirmLabel={handleConfirmLabel}
           onLogout={handleLogout}
         />
@@ -909,10 +968,18 @@ export default function App() {
 
       <CameraScanModal
         isOpen={scanStage === "labelCamera"}
-        title="SCAN LABEL"
-        helperText="Scan or paste the label part number."
+        title="SCAN LABEL PART #"
+        helperText="Step 1: scan or paste the label part number."
         onClose={() => setScanStage("idle")}
         onDetected={handleLabelDetected}
+      />
+
+      <CameraScanModal
+        isOpen={scanStage === "labelQtyCamera"}
+        title="SCAN PACKAGE QTY"
+        helperText="Step 2: scan the Package Qty barcode from the label. If it is printed text only, use manual input."
+        onClose={() => setScanStage("idle")}
+        onDetected={handleLabelQtyDetected}
       />
 
       <CameraScanModal
@@ -1145,6 +1212,7 @@ function PartMenuScreen({
   onPackagingQtyChange,
   onSkdQtyChange,
   onDisplayPart,
+  onScanPackageQty,
   onConfirmLabel,
   onLogout,
 }: {
@@ -1156,6 +1224,7 @@ function PartMenuScreen({
   onPackagingQtyChange: (value: string) => void;
   onSkdQtyChange: (value: string) => void;
   onDisplayPart: () => void;
+  onScanPackageQty: () => void;
   onConfirmLabel: () => void;
   onLogout: () => void;
 }) {
@@ -1194,7 +1263,7 @@ function PartMenuScreen({
               onChange={(e) => onPackagingQtyChange(e.target.value)}
               style={mobileInputStyle}
               inputMode="numeric"
-              placeholder="Packaging Qty"
+              placeholder="Scan Package Qty"
             />
           </div>
 
@@ -1213,11 +1282,25 @@ function PartMenuScreen({
 
       <div style={mobileButtonGridTwoStyle}>
         <button style={primaryButtonStyle} onClick={onDisplayPart}>
-          DISPLAY PART
+          SCAN PART #
         </button>
+
+        <button
+          style={{
+            ...blueActionButtonStyle,
+            opacity: labelDetailsDraft ? 1 : 0.55,
+            cursor: labelDetailsDraft ? "pointer" : "not-allowed",
+          }}
+          onClick={onScanPackageQty}
+          disabled={!labelDetailsDraft}
+        >
+          SCAN PKG QTY
+        </button>
+
         <button style={secondaryButtonStyle} onClick={onConfirmLabel}>
           CONFIRM
         </button>
+
         <button style={dangerButtonStyle} onClick={onLogout}>
           LOGOUT
         </button>
@@ -1534,6 +1617,10 @@ button {
   user-select: none;
 }
 
+button:disabled {
+  filter: grayscale(0.25);
+}
+
 textarea[readonly] {
   user-select: none;
 }
@@ -1841,8 +1928,6 @@ const mobileButtonGridTwoStyle = {
   minWidth: 0,
 };
 
-
-
 const baseButtonStyle = {
   minHeight: 54,
   border: "none",
@@ -1868,7 +1953,11 @@ const secondaryButtonStyle = {
   color: "#ffffff",
 };
 
-
+const blueActionButtonStyle = {
+  ...baseButtonStyle,
+  background: "linear-gradient(180deg, #38bdf8 0%, #1d4ed8 100%)",
+  color: "#ffffff",
+};
 
 const warningButtonStyle = {
   ...baseButtonStyle,
@@ -1881,6 +1970,7 @@ const dangerButtonStyle = {
   background: "linear-gradient(180deg, #ef4444 0%, #b91c1c 100%)",
   color: "#ffffff",
 };
+
 const scannerBigButtonStyle = {
   width: "100%",
   minHeight: 66,
@@ -1903,6 +1993,7 @@ const mobileOperatorActionGridStyle = {
   marginTop: 10,
   minWidth: 0,
 };
+
 const mobileHistoryListStyle = {
   display: "grid",
   gap: 8,
@@ -1937,6 +2028,7 @@ const mobileStatGridStyle = {
   gap: 9,
   minWidth: 0,
 };
+
 const mobileStatCardStyle = {
   background: "#374151",
   border: "1px solid #4b5563",
