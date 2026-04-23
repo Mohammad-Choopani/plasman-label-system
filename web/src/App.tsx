@@ -1841,13 +1841,7 @@ const mobileButtonGridTwoStyle = {
   minWidth: 0,
 };
 
-const mobileButtonGridScanStyle = {
-  display: "grid",
-  gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
-  gap: 8,
-  marginTop: 12,
-  minWidth: 0,
-};
+
 
 const baseButtonStyle = {
   minHeight: 54,
@@ -1874,11 +1868,7 @@ const secondaryButtonStyle = {
   color: "#ffffff",
 };
 
-const blueButtonStyle = {
-  ...baseButtonStyle,
-  background: "linear-gradient(180deg, #3b82f6 0%, #1d4ed8 100%)",
-  color: "#ffffff",
-};
+
 
 const warningButtonStyle = {
   ...baseButtonStyle,
