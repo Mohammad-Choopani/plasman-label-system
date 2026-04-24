@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { getStationConfig, loginOperator } from "./api/client";
-
+type FeedbackKind = "success" | "error" | "complete" | "defect";
 type AppScreen = "login" | "partMenu" | "hmi";
 type ScanStage = "idle" | "labelCamera" | "labelQtyCamera" | "partCamera";
 type ScanStatus = "idle" | "success" | "error";
@@ -622,7 +622,85 @@ function getVideoCropRect(videoWidth: number, videoHeight: number, scanMode: Cam
     height,
   };
 }
+function playTone(frequency: number, durationMs: number, volume = 0.18) {
+  try {
+    const AudioContextClass =
+      window.AudioContext ||
+      (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
 
+    if (!AudioContextClass) return;
+
+    const audioContext = new AudioContextClass();
+    const oscillator = audioContext.createOscillator();
+    const gain = audioContext.createGain();
+
+    oscillator.type = "sine";
+    oscillator.frequency.value = frequency;
+
+    gain.gain.value = volume;
+
+    oscillator.connect(gain);
+    gain.connect(audioContext.destination);
+
+    oscillator.start();
+
+    window.setTimeout(() => {
+      oscillator.stop();
+      audioContext.close().catch(() => {
+        // Ignore close errors.
+      });
+    }, durationMs);
+  } catch {
+    // Ignore audio errors.
+  }
+}
+
+function playFeedbackSound(kind: FeedbackKind) {
+  if (kind === "success") {
+    playTone(880, 110, 0.16);
+    return;
+  }
+
+  if (kind === "complete") {
+    playTone(880, 100, 0.16);
+    window.setTimeout(() => playTone(1175, 140, 0.16), 130);
+    return;
+  }
+
+  if (kind === "defect") {
+    playTone(440, 130, 0.18);
+    window.setTimeout(() => playTone(330, 160, 0.18), 150);
+    return;
+  }
+
+  playTone(220, 180, 0.2);
+}
+
+function speakShort(message: string) {
+  try {
+    if (!("speechSynthesis" in window)) return;
+
+    window.speechSynthesis.cancel();
+
+    const utterance = new SpeechSynthesisUtterance(message);
+    utterance.lang = "en-US";
+    utterance.rate = 1.05;
+    utterance.pitch = 1;
+    utterance.volume = 0.85;
+
+    window.speechSynthesis.speak(utterance);
+  } catch {
+    // Ignore speech errors.
+  }
+}
+
+function notifyOperator(kind: FeedbackKind, message?: string) {
+  playFeedbackSound(kind);
+
+  if (message) {
+    window.setTimeout(() => speakShort(message), 80);
+  }
+}
 export default function App() {
   const [screen, setScreen] = useState<AppScreen>("login");
   const [scanStage, setScanStage] = useState<ScanStage>("idle");
@@ -765,6 +843,10 @@ export default function App() {
 
     setScanStage("labelQtyCamera");
     setMachineMessage("Part number scanned. Step 2: scan the Package Qty barcode.");
+    notifyOperator(
+  "success",
+  `Label scan success. Part ${foundPart.externalPartNumber}.`
+  );
     pushAlert("success", "Label part number scanned successfully.");
   };
 
@@ -797,6 +879,7 @@ export default function App() {
 
     setScanStage("idle");
     setMachineMessage(`Package Qty scanned: ${qty}. Packaging Qty and SKD Qty are ready. Press CONFIRM.`);
+    notifyOperator("success", `Packaging quantity ${qty}.`);
     pushAlert("success", `Package Qty and SKD Qty set to ${qty}.`);
   };
 
@@ -893,6 +976,7 @@ export default function App() {
       });
       setMachineMessage("Wrong part barcode rejected.");
       setScanStatus("error");
+      notifyOperator("error");
       pushAlert("error", "Wrong part barcode scanned.");
       return;
     }
@@ -920,13 +1004,15 @@ export default function App() {
     setScanInputValue("");
     setScanStatus("success");
 
-    if (nextSession.remainingQty === 0) {
-      setMachineMessage("Container complete.");
-      pushAlert("success", "Container complete.");
-    } else {
-      setMachineMessage(`Scan accepted. Remaining ${nextSession.remainingQty}.`);
-      pushAlert("success", "Part barcode accepted.");
-    }
+   if (nextSession.remainingQty === 0) {
+  setMachineMessage("Container complete.");
+  notifyOperator("complete", "Container complete.");
+  pushAlert("success", "Container complete.");
+} else {
+  setMachineMessage(`Scan accepted. Remaining ${nextSession.remainingQty}.`);
+  notifyOperator("success");
+  pushAlert("success", "Part barcode accepted.");
+}
   };
 
   const handlePartScan = () => {
@@ -963,6 +1049,7 @@ export default function App() {
     setActiveSession(nextSession);
     setScanStatus("error");
     setMachineMessage("Defect recorded. Replacement scan required.");
+    notifyOperator("defect");
     pushAlert("error", "Defect recorded.");
   };
 
@@ -1057,7 +1144,7 @@ export default function App() {
         onDetected={handleLabelQtyDetected}
       />
 
-      <CameraScanModal
+            <CameraScanModal
         isOpen={scanStage === "partCamera"}
         title="SCAN PART BARCODE"
         helperText="Align the part barcode inside the scan box."
@@ -1085,7 +1172,8 @@ function CameraScanModal({
   const streamRef = useRef<MediaStream | null>(null);
   const scanTimerRef = useRef<number | null>(null);
   const detectedOnceRef = useRef(false);
-
+  const stableValueRef = useRef("");
+  const stableCountRef = useRef(0);
   const [statusText, setStatusText] = useState("Starting camera...");
   const [manualValue, setManualValue] = useState("");
 
@@ -1096,6 +1184,8 @@ function CameraScanModal({
 
     let mounted = true;
     detectedOnceRef.current = false;
+    stableValueRef.current = "";
+    stableCountRef.current = 0;
     setStatusText("Starting camera...");
 
     const start = async () => {
@@ -1145,46 +1235,65 @@ function CameraScanModal({
         setStatusText("Align barcode inside the red scan box.");
 
         scanTimerRef.current = window.setInterval(async () => {
-          try {
-            if (!videoRef.current || !canvasRef.current || detectedOnceRef.current) return;
+  try {
+    if (!videoRef.current || !canvasRef.current || detectedOnceRef.current) return;
 
-            const video = videoRef.current;
-            const canvas = canvasRef.current;
+    const video = videoRef.current;
+    const canvas = canvasRef.current;
 
-            if (!video.videoWidth || !video.videoHeight) return;
+    if (!video.videoWidth || !video.videoHeight) return;
 
-            const crop = getVideoCropRect(video.videoWidth, video.videoHeight, scanMode);
+    const crop = getVideoCropRect(video.videoWidth, video.videoHeight, scanMode);
 
-            canvas.width = crop.width;
-            canvas.height = crop.height;
+    canvas.width = crop.width;
+    canvas.height = crop.height;
 
-            const ctx = canvas.getContext("2d");
-            if (!ctx) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
 
-            ctx.drawImage(
-              video,
-              crop.x,
-              crop.y,
-              crop.width,
-              crop.height,
-              0,
-              0,
-              crop.width,
-              crop.height
-            );
+    ctx.drawImage(
+      video,
+      crop.x,
+      crop.y,
+      crop.width,
+      crop.height,
+      0,
+      0,
+      crop.width,
+      crop.height
+    );
 
-            const barcodes = await detector.detect(canvas);
-            const rawValue = String(barcodes?.[0]?.rawValue || "").trim();
+    const barcodes = await detector.detect(canvas);
+    const rawValue = String(barcodes?.[0]?.rawValue || "").trim();
 
-            if (rawValue && !detectedOnceRef.current) {
-              detectedOnceRef.current = true;
-              setStatusText("Barcode detected.");
-              onDetected(rawValue);
-            }
-          } catch {
-            // Ignore frame scan errors.
-          }
-        }, 420);
+    if (rawValue && !detectedOnceRef.current) {
+      const normalizedValue = normalizeScanValue(rawValue);
+      const requiredStableCount = scanMode === "labelQty" ? 2 : 3;
+
+      if (stableValueRef.current === normalizedValue) {
+        stableCountRef.current += 1;
+      } else {
+        stableValueRef.current = normalizedValue;
+        stableCountRef.current = 1;
+      }
+
+      setStatusText(
+        `Hold steady... ${Math.min(
+          stableCountRef.current,
+          requiredStableCount
+        )}/${requiredStableCount}`
+      );
+
+      if (stableCountRef.current >= requiredStableCount) {
+        detectedOnceRef.current = true;
+        setStatusText("Barcode detected.");
+        onDetected(rawValue);
+      }
+    }
+  } catch {
+    // Ignore frame scan errors.
+  }
+}, 420);
       } catch {
         setStatusText("Camera access failed. Use manual input below.");
       }
