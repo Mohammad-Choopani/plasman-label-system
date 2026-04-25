@@ -415,6 +415,7 @@ function buildCatalogFromRaw(raw: string): CatalogPart[] {
 const PART_CATALOG: CatalogPart[] = buildCatalogFromRaw(RAW_PART_CATALOG);
 
 type CameraScanMode = "labelPart" | "labelQty" | "partBarcode";
+
 function stripPartScanPrefix(value: string) {
   return String(value || "")
     .toUpperCase()
@@ -444,7 +445,7 @@ function normalizeScanValue(value: string) {
 }
 
 function tryExtractPartNumber(rawValue: string) {
-  const cleaned = stripPartScanPrefix(rawValue)
+  return stripPartScanPrefix(rawValue)
     .toUpperCase()
     .replace(/\s+/g, "")
     .replace(/[()]/g, "")
@@ -452,9 +453,8 @@ function tryExtractPartNumber(rawValue: string) {
     .replace(/I/g, "1")
     .replace(/L/g, "1")
     .trim();
-
-  return cleaned;
 }
+
 function extractQuantityFromScan(rawValue: string) {
   const cleaned = String(rawValue || "").toUpperCase().trim();
 
@@ -494,6 +494,7 @@ function findCatalogPartByLabelScan(rawValue: string) {
 
   const containedMatch = PART_CATALOG.find((item) => {
     const catalogKey = normalizeCatalogKey(item.externalPartNumber);
+
     return (
       normalizedExtracted.includes(catalogKey) ||
       catalogKey.includes(normalizedExtracted)
@@ -506,6 +507,7 @@ function findCatalogPartByLabelScan(rawValue: string) {
 function resolveExternalPartFromScan(rawValue: string) {
   const foundPart = findCatalogPartByLabelScan(rawValue);
   if (foundPart) return foundPart.externalPartNumber;
+
   return tryExtractPartNumber(rawValue);
 }
 
@@ -540,6 +542,7 @@ function appendSessionAction(session: LabelSession, message: string): string[] {
   );
 
   const nextEntries = [...otherEntries, buildSessionAction(message)].slice(-19);
+
   return createdEntry ? [createdEntry, ...nextEntries] : nextEntries;
 }
 
@@ -622,58 +625,100 @@ function getVideoCropRect(videoWidth: number, videoHeight: number, scanMode: Cam
     height,
   };
 }
-function playTone(frequency: number, durationMs: number, volume = 0.18) {
+
+let sharedAudioContext: AudioContext | null = null;
+
+function getAudioContext() {
   try {
     const AudioContextClass =
       window.AudioContext ||
       (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
 
-    if (!AudioContextClass) return;
+    if (!AudioContextClass) return null;
 
-    const audioContext = new AudioContextClass();
+    if (!sharedAudioContext) {
+      sharedAudioContext = new AudioContextClass();
+    }
+
+    if (sharedAudioContext.state === "suspended") {
+      void sharedAudioContext.resume();
+    }
+
+    return sharedAudioContext;
+  } catch {
+    return null;
+  }
+}
+
+function unlockOperatorAudio() {
+  const audioContext = getAudioContext();
+  if (!audioContext) return;
+
+  try {
     const oscillator = audioContext.createOscillator();
     const gain = audioContext.createGain();
 
     oscillator.type = "sine";
-    oscillator.frequency.value = frequency;
-
-    gain.gain.value = volume;
+    oscillator.frequency.value = 1;
+    gain.gain.value = 0.001;
 
     oscillator.connect(gain);
     gain.connect(audioContext.destination);
 
     oscillator.start();
-
-    window.setTimeout(() => {
-      oscillator.stop();
-      audioContext.close().catch(() => {
-        // Ignore close errors.
-      });
-    }, durationMs);
+    oscillator.stop(audioContext.currentTime + 0.02);
   } catch {
-    // Ignore audio errors.
+    // Ignore audio unlock errors.
+  }
+}
+
+function playTone(frequency: number, durationMs: number, volume = 0.22, delayMs = 0) {
+  const audioContext = getAudioContext();
+  if (!audioContext) return;
+
+  try {
+    const startTime = audioContext.currentTime + delayMs / 1000;
+    const oscillator = audioContext.createOscillator();
+    const gain = audioContext.createGain();
+
+    oscillator.type = "square";
+    oscillator.frequency.setValueAtTime(frequency, startTime);
+
+    gain.gain.setValueAtTime(0.001, startTime);
+    gain.gain.exponentialRampToValueAtTime(volume, startTime + 0.01);
+    gain.gain.exponentialRampToValueAtTime(0.001, startTime + durationMs / 1000);
+
+    oscillator.connect(gain);
+    gain.connect(audioContext.destination);
+
+    oscillator.start(startTime);
+    oscillator.stop(startTime + durationMs / 1000 + 0.03);
+  } catch {
+    // Ignore beep errors.
   }
 }
 
 function playFeedbackSound(kind: FeedbackKind) {
-  if (kind === "success") {
-    playTone(880, 110, 0.16);
+  unlockOperatorAudio();
+
+  if (kind === "complete") {
     return;
   }
 
-  if (kind === "complete") {
-    playTone(880, 100, 0.16);
-    window.setTimeout(() => playTone(1175, 140, 0.16), 130);
+  if (kind === "success") {
+    playTone(1150, 75, 0.24, 0);
+    playTone(1450, 85, 0.22, 105);
     return;
   }
 
   if (kind === "defect") {
-    playTone(440, 130, 0.18);
-    window.setTimeout(() => playTone(330, 160, 0.18), 150);
+    playTone(420, 140, 0.24, 0);
+    playTone(320, 180, 0.24, 170);
     return;
   }
 
-  playTone(220, 180, 0.2);
+  playTone(260, 220, 0.26, 0);
+  playTone(210, 180, 0.24, 250);
 }
 
 function speakShort(message: string) {
@@ -684,9 +729,9 @@ function speakShort(message: string) {
 
     const utterance = new SpeechSynthesisUtterance(message);
     utterance.lang = "en-US";
-    utterance.rate = 1.05;
+    utterance.rate = 1;
     utterance.pitch = 1;
-    utterance.volume = 0.85;
+    utterance.volume = 0.95;
 
     window.speechSynthesis.speak(utterance);
   } catch {
@@ -694,13 +739,6 @@ function speakShort(message: string) {
   }
 }
 
-function notifyOperator(kind: FeedbackKind, message?: string) {
-  playFeedbackSound(kind);
-
-  if (message) {
-    window.setTimeout(() => speakShort(message), 80);
-  }
-}
 export default function App() {
   const [screen, setScreen] = useState<AppScreen>("login");
   const [scanStage, setScanStage] = useState<ScanStage>("idle");
@@ -718,8 +756,6 @@ export default function App() {
 
   const [labelDetailsDraft, setLabelDetailsDraft] = useState<LabelDetailsDraft | null>(null);
   const [activeSession, setActiveSession] = useState<LabelSession | null>(null);
-
-  const [scanInputValue, setScanInputValue] = useState("");
   const [scanStatus, setScanStatus] = useState<ScanStatus>("idle");
   const [alerts, setAlerts] = useState<AlertItem[]>([]);
 
@@ -729,6 +765,16 @@ export default function App() {
   const hmiVersion = stationConfig.version || "v 3.1.33.275";
 
   const catalogCount = useMemo(() => PART_CATALOG.length, []);
+
+  const displayMachineMessage = useMemo(() => {
+    const normalized = String(machineMessage || "").toLowerCase();
+
+    if (screen === "partMenu" && normalized.includes("demo mode")) {
+      return "Ready to scan EXT label.";
+    }
+
+    return machineMessage;
+  }, [screen, machineMessage]);
 
   const pushAlert = (level: AlertLevel, message: string) => {
     setAlerts((prev) =>
@@ -748,6 +794,7 @@ export default function App() {
     const loadStationConfig = async () => {
       try {
         const configResponse = await getStationConfig();
+
         if (configResponse?.ok && configResponse?.data) {
           setStationConfig({
             stationId: configResponse.data.stationId || "WP3-0031",
@@ -771,6 +818,8 @@ export default function App() {
   }, []);
 
   const handleLogin = async () => {
+    unlockOperatorAudio();
+
     if (!employeeId.trim() || !crewSize.trim()) {
       setMachineMessage("Please enter Employee ID and Crew Size.");
       pushAlert("warning", "Login validation failed.");
@@ -828,8 +877,9 @@ export default function App() {
       });
 
       setScanStage("labelQtyCamera");
-      setMachineMessage("Part number scanned, but catalog row was not found. Step 2: scan Package Qty.");
+      setMachineMessage("Part number scanned. Step 2: scan Package Qty.");
       pushAlert("warning", "Catalog row not found. Scan Package Qty next.");
+      speakShort(`External label ${extracted}`);
       return;
     }
 
@@ -843,11 +893,8 @@ export default function App() {
 
     setScanStage("labelQtyCamera");
     setMachineMessage("Part number scanned. Step 2: scan the Package Qty barcode.");
-    notifyOperator(
-  "success",
-  `Label scan success. Part ${foundPart.externalPartNumber}.`
-  );
     pushAlert("success", "Label part number scanned successfully.");
+    speakShort(`External label ${foundPart.externalPartNumber}`);
   };
 
   const handleLabelQtyDetected = (value: string) => {
@@ -878,9 +925,9 @@ export default function App() {
     );
 
     setScanStage("idle");
-    setMachineMessage(`Package Qty scanned: ${qty}. Packaging Qty and SKD Qty are ready. Press CONFIRM.`);
-    notifyOperator("success", `Packaging quantity ${qty}.`);
+    setMachineMessage(`Package Qty scanned: ${qty}. Press CONFIRM.`);
     pushAlert("success", `Package Qty and SKD Qty set to ${qty}.`);
+    speakShort(`Package quantity ${qty}`);
   };
 
   const handleConfirmLabel = () => {
@@ -928,7 +975,6 @@ export default function App() {
     });
 
     setActiveSession(nextSession);
-    setScanInputValue("");
     setScanStatus("idle");
     setScreen("hmi");
     setMachineMessage("Label confirmed. HMI is ready for barcode scanning.");
@@ -943,6 +989,7 @@ export default function App() {
     }
 
     const normalizedRaw = normalizeScanValue(rawValue);
+
     if (!normalizedRaw) {
       setMachineMessage("Scan or paste a barcode first.");
       setScanStatus("error");
@@ -956,6 +1003,7 @@ export default function App() {
       setMachineMessage("Container already complete. Over-scan blocked.");
       setScanStatus("error");
       pushAlert("error", "Over-scan blocked.");
+      playFeedbackSound("error");
       return;
     }
 
@@ -974,10 +1022,11 @@ export default function App() {
           `Rejected scan ${resolvedExternalPartNumber}.`
         ),
       });
+
       setMachineMessage("Wrong part barcode rejected.");
       setScanStatus("error");
-      notifyOperator("error");
       pushAlert("error", "Wrong part barcode scanned.");
+      playFeedbackSound("error");
       return;
     }
 
@@ -1001,22 +1050,17 @@ export default function App() {
     });
 
     setActiveSession(nextSession);
-    setScanInputValue("");
     setScanStatus("success");
 
-   if (nextSession.remainingQty === 0) {
-  setMachineMessage("Container complete.");
-  notifyOperator("complete", "Container complete.");
-  pushAlert("success", "Container complete.");
-} else {
-  setMachineMessage(`Scan accepted. Remaining ${nextSession.remainingQty}.`);
-  notifyOperator("success");
-  pushAlert("success", "Part barcode accepted.");
-}
-  };
-
-  const handlePartScan = () => {
-    handlePartScanFromValue(scanInputValue);
+    if (nextSession.remainingQty === 0) {
+      setMachineMessage("Container complete.");
+      pushAlert("success", "Container complete.");
+      speakShort("Container complete");
+    } else {
+      setMachineMessage(`Scan accepted. Remaining ${nextSession.remainingQty}.`);
+      pushAlert("success", "Part barcode accepted.");
+      playFeedbackSound("success");
+    }
   };
 
   const handleDefect = () => {
@@ -1027,6 +1071,7 @@ export default function App() {
     }
 
     const candidate = activeSession.scanHistory.find((item) => item.status === "active");
+
     if (!candidate) {
       setMachineMessage("No active scanned part available to mark as defect.");
       pushAlert("warning", "No active scanned part available.");
@@ -1049,14 +1094,13 @@ export default function App() {
     setActiveSession(nextSession);
     setScanStatus("error");
     setMachineMessage("Defect recorded. Replacement scan required.");
-    notifyOperator("defect");
     pushAlert("error", "Defect recorded.");
+    playFeedbackSound("defect");
   };
 
   const handleChangePart = () => {
     setActiveSession(null);
     setLabelDetailsDraft(null);
-    setScanInputValue("");
     setScanStatus("idle");
     setScreen("partMenu");
     setMachineMessage("Start a new label session.");
@@ -1067,7 +1111,6 @@ export default function App() {
     setCrewSize("1");
     setLabelDetailsDraft(null);
     setActiveSession(null);
-    setScanInputValue("");
     setScanStatus("idle");
     setAlerts([]);
     setScreen("login");
@@ -1095,7 +1138,7 @@ export default function App() {
         <PartMenuScreen
           hmiCellCode={hmiCellCode}
           hmiVersion={hmiVersion}
-          machineMessage={machineMessage}
+          machineMessage={displayMachineMessage}
           catalogCount={catalogCount}
           labelDetailsDraft={labelDetailsDraft}
           onDisplayPart={handleOpenDisplayPart}
@@ -1116,9 +1159,6 @@ export default function App() {
           activeSession={activeSession}
           alerts={alerts}
           scanStatus={scanStatus}
-          scanInputValue={scanInputValue}
-          onScanInputChange={setScanInputValue}
-          onScan={handlePartScan}
           onOpenCamera={() => setScanStage("partCamera")}
           onDefect={handleDefect}
           onChangePart={handleChangePart}
@@ -1144,7 +1184,7 @@ export default function App() {
         onDetected={handleLabelQtyDetected}
       />
 
-            <CameraScanModal
+      <CameraScanModal
         isOpen={scanStage === "partCamera"}
         title="SCAN PART BARCODE"
         helperText="Align the part barcode inside the scan box."
@@ -1174,6 +1214,7 @@ function CameraScanModal({
   const detectedOnceRef = useRef(false);
   const stableValueRef = useRef("");
   const stableCountRef = useRef(0);
+
   const [statusText, setStatusText] = useState("Starting camera...");
   const [manualValue, setManualValue] = useState("");
 
@@ -1183,6 +1224,7 @@ function CameraScanModal({
     if (!isOpen) return;
 
     let mounted = true;
+
     detectedOnceRef.current = false;
     stableValueRef.current = "";
     stableCountRef.current = 0;
@@ -1235,65 +1277,65 @@ function CameraScanModal({
         setStatusText("Align barcode inside the red scan box.");
 
         scanTimerRef.current = window.setInterval(async () => {
-  try {
-    if (!videoRef.current || !canvasRef.current || detectedOnceRef.current) return;
+          try {
+            if (!videoRef.current || !canvasRef.current || detectedOnceRef.current) return;
 
-    const video = videoRef.current;
-    const canvas = canvasRef.current;
+            const video = videoRef.current;
+            const canvas = canvasRef.current;
 
-    if (!video.videoWidth || !video.videoHeight) return;
+            if (!video.videoWidth || !video.videoHeight) return;
 
-    const crop = getVideoCropRect(video.videoWidth, video.videoHeight, scanMode);
+            const crop = getVideoCropRect(video.videoWidth, video.videoHeight, scanMode);
 
-    canvas.width = crop.width;
-    canvas.height = crop.height;
+            canvas.width = crop.width;
+            canvas.height = crop.height;
 
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
+            const ctx = canvas.getContext("2d");
+            if (!ctx) return;
 
-    ctx.drawImage(
-      video,
-      crop.x,
-      crop.y,
-      crop.width,
-      crop.height,
-      0,
-      0,
-      crop.width,
-      crop.height
-    );
+            ctx.drawImage(
+              video,
+              crop.x,
+              crop.y,
+              crop.width,
+              crop.height,
+              0,
+              0,
+              crop.width,
+              crop.height
+            );
 
-    const barcodes = await detector.detect(canvas);
-    const rawValue = String(barcodes?.[0]?.rawValue || "").trim();
+            const barcodes = await detector.detect(canvas);
+            const rawValue = String(barcodes?.[0]?.rawValue || "").trim();
 
-    if (rawValue && !detectedOnceRef.current) {
-      const normalizedValue = normalizeScanValue(rawValue);
-      const requiredStableCount = scanMode === "labelQty" ? 2 : 3;
+            if (rawValue && !detectedOnceRef.current) {
+              const normalizedValue = normalizeScanValue(rawValue);
+              const requiredStableCount = scanMode === "labelQty" ? 2 : 3;
 
-      if (stableValueRef.current === normalizedValue) {
-        stableCountRef.current += 1;
-      } else {
-        stableValueRef.current = normalizedValue;
-        stableCountRef.current = 1;
-      }
+              if (stableValueRef.current === normalizedValue) {
+                stableCountRef.current += 1;
+              } else {
+                stableValueRef.current = normalizedValue;
+                stableCountRef.current = 1;
+              }
 
-      setStatusText(
-        `Hold steady... ${Math.min(
-          stableCountRef.current,
-          requiredStableCount
-        )}/${requiredStableCount}`
-      );
+              setStatusText(
+                `Hold steady... ${Math.min(
+                  stableCountRef.current,
+                  requiredStableCount
+                )}/${requiredStableCount}`
+              );
 
-      if (stableCountRef.current >= requiredStableCount) {
-        detectedOnceRef.current = true;
-        setStatusText("Barcode detected.");
-        onDetected(rawValue);
-      }
-    }
-  } catch {
-    // Ignore frame scan errors.
-  }
-}, 420);
+              if (stableCountRef.current >= requiredStableCount) {
+                detectedOnceRef.current = true;
+                setStatusText("Barcode detected.");
+                onDetected(rawValue);
+              }
+            }
+          } catch {
+            // Ignore frame scan errors.
+          }
+        }, 420);
       } catch {
         setStatusText("Camera access failed. Use manual input below.");
       }
@@ -1316,6 +1358,8 @@ function CameraScanModal({
 
       setManualValue("");
       detectedOnceRef.current = false;
+      stableValueRef.current = "";
+      stableCountRef.current = 0;
     };
   }, [isOpen, onDetected, scanMode]);
 
@@ -1369,7 +1413,9 @@ function CameraScanModal({
             style={modalSubmitButtonStyle}
             onClick={() => {
               const value = manualValue.trim();
+
               if (!value || detectedOnceRef.current) return;
+
               detectedOnceRef.current = true;
               onDetected(value);
             }}
@@ -1384,7 +1430,6 @@ function CameraScanModal({
     </div>
   );
 }
-
 function LoginScreen({
   stationId,
   hmiVersion,
@@ -1499,7 +1544,7 @@ function PartMenuScreen({
               readOnly
               style={readonlyMobileInputStyle}
               inputMode="numeric"
-              placeholder="Scanned Package Qty"
+              placeholder="Package Qty"
             />
           </div>
 
@@ -1510,7 +1555,7 @@ function PartMenuScreen({
               readOnly
               style={readonlyMobileInputStyle}
               inputMode="numeric"
-              placeholder="Auto SKD Qty"
+              placeholder="SKD Qty"
             />
           </div>
         </div>
@@ -1518,7 +1563,7 @@ function PartMenuScreen({
 
       <div style={mobileButtonGridTwoStyle}>
         <button style={primaryButtonStyle} onClick={onDisplayPart}>
-          SCAN PART #
+          SCAN EXT LABEL
         </button>
 
         <button
@@ -1530,7 +1575,7 @@ function PartMenuScreen({
           onClick={onScanPackageQty}
           disabled={!labelDetailsDraft}
         >
-          SCAN QTY
+          SCAN PACKAGE
         </button>
 
         <button style={secondaryButtonStyle} onClick={onConfirmLabel}>
@@ -1542,7 +1587,7 @@ function PartMenuScreen({
         </button>
       </div>
 
-      <div style={mobileMessageBarStyle}>{machineMessage}</div>
+      {machineMessage ? <div style={mobileMessageBarStyle}>{machineMessage}</div> : null}
     </section>
   );
 }
@@ -1557,9 +1602,6 @@ function HmiScreen({
   activeSession,
   alerts,
   scanStatus,
-  scanInputValue,
-  onScanInputChange,
-  onScan,
   onOpenCamera,
   onDefect,
   onChangePart,
@@ -1574,24 +1616,16 @@ function HmiScreen({
   activeSession: LabelSession;
   alerts: AlertItem[];
   scanStatus: ScanStatus;
-  scanInputValue: string;
-  onScanInputChange: (value: string) => void;
-  onScan: () => void;
   onOpenCamera: () => void;
   onDefect: () => void;
   onChangePart: () => void;
   onLogout: () => void;
 }) {
   const [now, setNow] = useState(new Date());
-  const scanInputRef = useRef<HTMLTextAreaElement | null>(null);
 
   useEffect(() => {
     const timer = window.setInterval(() => setNow(new Date()), 1000);
     return () => window.clearInterval(timer);
-  }, []);
-
-  useEffect(() => {
-    scanInputRef.current?.focus();
   }, []);
 
   const historyRows =
@@ -1694,36 +1728,25 @@ function HmiScreen({
           )}
         </div>
 
-        <button style={scannerBigButtonStyle} onClick={onOpenCamera}>
-          SCANNER
-        </button>
-
-        <textarea
-          ref={scanInputRef}
-          value={scanInputValue}
-          onChange={(e) => onScanInputChange(e.target.value)}
-          placeholder="Scanner value will appear here"
-          style={mobileScanTextareaStyle}
-          readOnly
-        />
+        <div style={scannerFabWrapStyle}>
+          <button style={scannerFabButtonStyle} onClick={onOpenCamera}>
+            <span style={scannerFabPrimaryTextStyle}>SCAN</span>
+            <span style={scannerFabSecondaryTextStyle}>CAMERA</span>
+          </button>
+        </div>
 
         <div style={mobileOperatorActionGridStyle}>
-          <button style={primaryButtonStyle} onClick={onScan}>
-            SUBMIT
-          </button>
           <button style={warningButtonStyle} onClick={onDefect}>
             DEFECT
           </button>
-        </div>
-
-        <div style={mobileOperatorActionGridStyle}>
           <button style={secondaryButtonStyle} onClick={onChangePart}>
             CHANGE PART
           </button>
-          <button style={dangerButtonStyle} onClick={onLogout}>
-            LOGOUT
-          </button>
         </div>
+
+        <button style={fullWidthDangerButtonStyle} onClick={onLogout}>
+          LOGOUT
+        </button>
       </div>
 
       <div style={mobileCardStyle}>
@@ -1764,7 +1787,7 @@ function HmiScreen({
         <MobileMetaCard label="EMPLOYEE" value={employeeId || "-"} />
       </div>
 
-      <div style={mobileMessageBarStyle}>{machineMessage}</div>
+      {machineMessage ? <div style={mobileMessageBarStyle}>{machineMessage}</div> : null}
     </section>
   );
 }
@@ -1902,8 +1925,10 @@ const mainShellStyle = {
 const loginScreenStyle = {
   width: "100%",
   maxWidth: 560,
+  minHeight: "calc(100vh - 24px)",
   display: "grid",
   gap: 14,
+  alignContent: "center",
 };
 
 const loginHeaderStyle = {
@@ -1930,6 +1955,7 @@ const loginVersionStyle = {
 };
 
 const loginFormCardStyle = {
+  width: "100%",
   background: "#e5e7eb",
   border: "1px solid #cbd5e1",
   borderRadius: 20,
@@ -2065,6 +2091,7 @@ const mobileSectionTitleStyle = {
   color: "#0f172a",
   marginBottom: 10,
   letterSpacing: 0.3,
+  textAlign: "center" as const,
 };
 
 const mobileCardHeaderRowStyle = {
@@ -2098,7 +2125,7 @@ const mobileDetailGridStyle = {
 
 const mobileInputGridStyle = {
   display: "grid",
-  gridTemplateColumns: "repeat(auto-fit, minmax(145px, 1fr))",
+  gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
   gap: 12,
   minWidth: 0,
 };
@@ -2148,26 +2175,9 @@ const readonlyMobileInputStyle = {
   cursor: "default",
 };
 
-const mobileScanTextareaStyle = {
-  width: "100%",
-  minHeight: 72,
-  resize: "none" as const,
-  background: "#f8fafc",
-  color: "#111827",
-  border: "1px solid #9ca3af",
-  borderRadius: 16,
-  padding: 12,
-  fontSize: 14,
-  fontWeight: 800,
-  boxSizing: "border-box" as const,
-  marginTop: 10,
-  opacity: 0.92,
-  pointerEvents: "none" as const,
-};
-
 const mobileButtonGridTwoStyle = {
   display: "grid",
-  gridTemplateColumns: "repeat(auto-fit, minmax(145px, 1fr))",
+  gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
   gap: 10,
   minWidth: 0,
 };
@@ -2215,27 +2225,57 @@ const dangerButtonStyle = {
   color: "#ffffff",
 };
 
-const scannerBigButtonStyle = {
+const fullWidthDangerButtonStyle = {
+  ...dangerButtonStyle,
   width: "100%",
-  minHeight: 66,
-  border: "none",
-  borderRadius: 18,
-  marginTop: 12,
-  background: "linear-gradient(180deg, #38bdf8 0%, #1d4ed8 100%)",
-  color: "#ffffff",
-  fontSize: 20,
-  fontWeight: 950,
-  letterSpacing: 0.8,
-  cursor: "pointer",
-  boxShadow: "0 14px 24px rgba(29,78,216,0.34)",
+  marginTop: 10,
 };
 
 const mobileOperatorActionGridStyle = {
   display: "grid",
   gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
   gap: 10,
-  marginTop: 10,
+  marginTop: 14,
   minWidth: 0,
+};
+
+const scannerFabWrapStyle = {
+  display: "flex",
+  justifyContent: "center",
+  alignItems: "center",
+  marginTop: 14,
+  marginBottom: 6,
+};
+
+const scannerFabButtonStyle = {
+  width: 132,
+  height: 132,
+  borderRadius: "50%",
+  border: "none",
+  display: "flex",
+  flexDirection: "column" as const,
+  alignItems: "center",
+  justifyContent: "center",
+  gap: 4,
+  background: "radial-gradient(circle at 30% 30%, #67e8f9 0%, #2563eb 55%, #1e3a8a 100%)",
+  color: "#ffffff",
+  cursor: "pointer",
+  boxShadow:
+    "0 18px 34px rgba(37,99,235,0.34), inset 0 3px 10px rgba(255,255,255,0.18)",
+};
+
+const scannerFabPrimaryTextStyle = {
+  fontSize: 24,
+  fontWeight: 950,
+  letterSpacing: 1,
+  lineHeight: 1,
+};
+
+const scannerFabSecondaryTextStyle = {
+  fontSize: 11,
+  fontWeight: 800,
+  letterSpacing: 1.4,
+  opacity: 0.92,
 };
 
 const mobileHistoryListStyle = {
@@ -2367,6 +2407,7 @@ const mobileMessageBarStyle = {
   lineHeight: 1.4,
   wordBreak: "break-word" as const,
   minWidth: 0,
+  textAlign: "center" as const,
 };
 
 const modalOverlayStyle = {
