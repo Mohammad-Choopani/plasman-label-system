@@ -754,7 +754,8 @@ export default function App() {
     version: "v 3.1.33.275",
   });
 
-  const [labelDetailsDraft, setLabelDetailsDraft] = useState<LabelDetailsDraft | null>(null);
+  const [labelDetailsDraft, setLabelDetailsDraft] =
+    useState<LabelDetailsDraft | null>(null);
   const [activeSession, setActiveSession] = useState<LabelSession | null>(null);
   const [scanStatus, setScanStatus] = useState<ScanStatus>("idle");
   const [alerts, setAlerts] = useState<AlertItem[]>([]);
@@ -969,7 +970,9 @@ export default function App() {
       scanHistory: [],
       actionHistory: [
         buildSessionAction(
-          `Label session created - EXT ${labelDetailsDraft.externalPartNumber} - INT ${labelDetailsDraft.internalNumber || "#N/A"} - PKG ${packagingQty} - SKD ${skdQty}`
+          `Label session created - EXT ${labelDetailsDraft.externalPartNumber} - INT ${
+            labelDetailsDraft.internalNumber || "#N/A"
+          } - PKG ${packagingQty} - SKD ${skdQty}`
         ),
       ],
     });
@@ -977,7 +980,7 @@ export default function App() {
     setActiveSession(nextSession);
     setScanStatus("idle");
     setScreen("hmi");
-    setMachineMessage("Label confirmed. HMI is ready for continuous scanning.");
+    setMachineMessage("Label confirmed. HMI is ready for hand scanner input.");
   };
 
   const handlePartScanFromValue = (rawValue: string): boolean => {
@@ -1066,6 +1069,23 @@ export default function App() {
     playFeedbackSound("success");
     return false;
   };
+
+  useEffect(() => {
+    const handleHardwareScanSubmit = (event: Event) => {
+      const customEvent = event as CustomEvent<string>;
+      const value = String(customEvent.detail || "").trim();
+
+      if (!value) return;
+
+      handlePartScanFromValue(value);
+    };
+
+    window.addEventListener("hardware-scan-submit", handleHardwareScanSubmit);
+
+    return () => {
+      window.removeEventListener("hardware-scan-submit", handleHardwareScanSubmit);
+    };
+  }, [activeSession]);
 
   const handleDefect = () => {
     if (!activeSession) {
@@ -1700,16 +1720,54 @@ function HmiScreen({
   onLogout: () => void;
 }) {
   const [now, setNow] = useState(new Date());
+  const [hardwareScanValue, setHardwareScanValue] = useState("");
+  const hardwareInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     const timer = window.setInterval(() => setNow(new Date()), 1000);
     return () => window.clearInterval(timer);
   }, []);
 
+  useEffect(() => {
+    const focusTimer = window.setTimeout(() => {
+      hardwareInputRef.current?.focus();
+    }, 250);
+
+    return () => window.clearTimeout(focusTimer);
+  }, []);
+
   const historyRows =
     activeSession.actionHistory.length > 0
       ? activeSession.actionHistory
       : alerts.map((alert) => alert.message);
+
+  const submitHardwareScan = () => {
+    const value = hardwareScanValue.trim();
+
+    if (!value) return;
+
+    const submitEvent = new CustomEvent("hardware-scan-submit", {
+      detail: value,
+    });
+
+    window.dispatchEvent(submitEvent);
+    setHardwareScanValue("");
+
+    window.setTimeout(() => {
+      hardwareInputRef.current?.focus();
+    }, 80);
+  };
+  useEffect(() => {
+  const value = hardwareScanValue.trim();
+
+  if (value.length < 6) return;
+
+  const timer = window.setTimeout(() => {
+    submitHardwareScan();
+  }, 180);
+
+  return () => window.clearTimeout(timer);
+}, [hardwareScanValue]);
 
   return (
     <section style={mobileAppShellStyle}>
@@ -1767,34 +1825,31 @@ function HmiScreen({
                   key={`${item}-${index}`}
                   style={{
                     ...mobileHistoryItemStyle,
-                    borderLeft:
-                      isCreated
-                        ? "5px solid #2563eb"
-                        : isAccepted
-                        ? "5px solid #16a34a"
-                        : isRejected
-                        ? "5px solid #f59e0b"
-                        : isDefect
-                        ? "5px solid #dc2626"
-                        : "5px solid #94a3b8",
-                    background:
-                      isCreated
-                        ? "#dbeafe"
-                        : isAccepted
-                        ? "#dcfce7"
-                        : isRejected
-                        ? "#fef3c7"
-                        : isDefect
-                        ? "#fee2e2"
-                        : "#f8fafc",
-                    color:
-                      isDefect
-                        ? "#991b1b"
-                        : isRejected
-                        ? "#92400e"
-                        : isAccepted
-                        ? "#166534"
-                        : "#0f172a",
+                    borderLeft: isCreated
+                      ? "5px solid #2563eb"
+                      : isAccepted
+                      ? "5px solid #16a34a"
+                      : isRejected
+                      ? "5px solid #f59e0b"
+                      : isDefect
+                      ? "5px solid #dc2626"
+                      : "5px solid #94a3b8",
+                    background: isCreated
+                      ? "#dbeafe"
+                      : isAccepted
+                      ? "#dcfce7"
+                      : isRejected
+                      ? "#fef3c7"
+                      : isDefect
+                      ? "#fee2e2"
+                      : "#f8fafc",
+                    color: isDefect
+                      ? "#991b1b"
+                      : isRejected
+                      ? "#92400e"
+                      : isAccepted
+                      ? "#166534"
+                      : "#0f172a",
                   }}
                 >
                   {item}
@@ -1806,10 +1861,40 @@ function HmiScreen({
           )}
         </div>
 
+        <div style={hardwareScannerPanelStyle}>
+          <div style={hardwareScannerTitleStyle}>HAND SCANNER READY</div>
+
+          <input
+            ref={hardwareInputRef}
+            value={hardwareScanValue}
+            onChange={(e) => setHardwareScanValue(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                submitHardwareScan();
+              }
+            }}
+            onBlur={() => {
+              window.setTimeout(() => {
+                hardwareInputRef.current?.focus();
+              }, 150);
+            }}
+            placeholder="Tap here once, then scan with Eyoyo"
+            style={hardwareScannerInputStyle}
+            autoComplete="off"
+            autoCorrect="off"
+            spellCheck={false}
+          />
+
+          <button style={blueActionButtonStyle} onClick={submitHardwareScan}>
+            SUBMIT HAND SCAN
+          </button>
+        </div>
+
         <div style={scannerFabWrapStyle}>
           <button style={scannerFabButtonStyle} onClick={onOpenCamera}>
-            <span style={scannerFabPrimaryTextStyle}>START</span>
-            <span style={scannerFabSecondaryTextStyle}>AUTO SCAN</span>
+            <span style={scannerFabPrimaryTextStyle}>CAM</span>
+            <span style={scannerFabSecondaryTextStyle}>SCAN</span>
           </button>
         </div>
 
@@ -1857,7 +1942,7 @@ function HmiScreen({
       </div>
 
       <div style={mobileMetaGridStyle}>
-        <MobileMetaCard label="SHIFT" value="Mobile Scan Mode" />
+        <MobileMetaCard label="SHIFT" value="Hand Scanner Mode" />
         <MobileMetaCard label="CREW SIZE" value={crewSize || "-"} />
         <MobileMetaCard label="DATE" value={formatUiDate(now)} />
         <MobileMetaCard label="TIME" value={formatUiTime(now)} />
@@ -2626,4 +2711,34 @@ const modalCancelButtonStyle = {
   fontSize: 16,
   fontWeight: 800,
   cursor: "pointer",
+};
+const hardwareScannerPanelStyle = {
+  marginTop: 14,
+  background: "#dbeafe",
+  border: "1px solid #93c5fd",
+  borderRadius: 18,
+  padding: 12,
+  display: "grid",
+  gap: 10,
+};
+
+const hardwareScannerTitleStyle = {
+  fontSize: 13,
+  fontWeight: 950,
+  color: "#1e3a8a",
+  textAlign: "center" as const,
+  letterSpacing: 0.4,
+};
+
+const hardwareScannerInputStyle = {
+  width: "100%",
+  minHeight: 52,
+  border: "2px solid #2563eb",
+  background: "#ffffff",
+  borderRadius: 14,
+  padding: "0 12px",
+  fontSize: 16,
+  fontWeight: 800,
+  color: "#111827",
+  outline: "none",
 };
