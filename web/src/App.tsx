@@ -67,8 +67,8 @@ type CameraScanModalProps = {
   helperText: string;
   onClose: () => void;
   onDetected: (value: string) => void;
+  onDefectLast?: () => void;
 };
-
 /*
   IMPORTANT:
   Keep your full RAW_PART_CATALOG block here exactly as it is in your current file.
@@ -977,15 +977,16 @@ export default function App() {
     setActiveSession(nextSession);
     setScanStatus("idle");
     setScreen("hmi");
-    setMachineMessage("Label confirmed. HMI is ready for barcode scanning.");
+    setMachineMessage("Label confirmed. HMI is ready for continuous scanning.");
   };
 
-  const handlePartScanFromValue = (rawValue: string) => {
+  const handlePartScanFromValue = (rawValue: string): boolean => {
     if (!activeSession) {
       setMachineMessage("No active label session.");
       setScanStatus("error");
       pushAlert("error", "No active label session.");
-      return;
+      playFeedbackSound("error");
+      return true;
     }
 
     const normalizedRaw = normalizeScanValue(rawValue);
@@ -994,7 +995,8 @@ export default function App() {
       setMachineMessage("Scan or paste a barcode first.");
       setScanStatus("error");
       pushAlert("warning", "Barcode input is empty.");
-      return;
+      playFeedbackSound("error");
+      return false;
     }
 
     const resolvedExternalPartNumber = resolveExternalPartFromScan(rawValue);
@@ -1004,7 +1006,7 @@ export default function App() {
       setScanStatus("error");
       pushAlert("error", "Over-scan blocked.");
       playFeedbackSound("error");
-      return;
+      return true;
     }
 
     const isMatch =
@@ -1023,11 +1025,11 @@ export default function App() {
         ),
       });
 
-      setMachineMessage("Wrong part barcode rejected.");
+      setMachineMessage("Wrong part barcode rejected. Continue scanning.");
       setScanStatus("error");
       pushAlert("error", "Wrong part barcode scanned.");
       playFeedbackSound("error");
-      return;
+      return false;
     }
 
     const newRecord: SessionScanRecord = {
@@ -1056,17 +1058,20 @@ export default function App() {
       setMachineMessage("Container complete.");
       pushAlert("success", "Container complete.");
       speakShort("Container complete");
-    } else {
-      setMachineMessage(`Scan accepted. Remaining ${nextSession.remainingQty}.`);
-      pushAlert("success", "Part barcode accepted.");
-      playFeedbackSound("success");
+      return true;
     }
+
+    setMachineMessage(`Scan accepted. Remaining ${nextSession.remainingQty}. Continue scanning.`);
+    pushAlert("success", "Part barcode accepted.");
+    playFeedbackSound("success");
+    return false;
   };
 
   const handleDefect = () => {
     if (!activeSession) {
       setMachineMessage("No active label session.");
       pushAlert("warning", "Defect action requires active session.");
+      playFeedbackSound("error");
       return;
     }
 
@@ -1075,6 +1080,7 @@ export default function App() {
     if (!candidate) {
       setMachineMessage("No active scanned part available to mark as defect.");
       pushAlert("warning", "No active scanned part available.");
+      playFeedbackSound("error");
       return;
     }
 
@@ -1186,13 +1192,20 @@ export default function App() {
 
       <CameraScanModal
         isOpen={scanStage === "partCamera"}
-        title="SCAN PART BARCODE"
-        helperText="Align the part barcode inside the scan box."
+        title="AUTO PART SCAN"
+        helperText="Keep this screen open. Scan parts one by one until container complete."
         scanMode="partBarcode"
+        continuous
         onClose={() => setScanStage("idle")}
+        onDefectLast={handleDefect}
         onDetected={(value) => {
-          setScanStage("idle");
-          handlePartScanFromValue(value);
+          const shouldClose = handlePartScanFromValue(value);
+
+          if (shouldClose) {
+            window.setTimeout(() => {
+              setScanStage("idle");
+            }, 550);
+          }
         }}
       />
     </main>
@@ -1204,21 +1217,46 @@ function CameraScanModal({
   title,
   helperText,
   scanMode,
+  continuous,
   onClose,
   onDetected,
-}: CameraScanModalProps & { scanMode: CameraScanMode }) {
+  onDefectLast,
+}: CameraScanModalProps & {
+  scanMode: CameraScanMode;
+  continuous?: boolean;
+}) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const scanTimerRef = useRef<number | null>(null);
+  const resetTimerRef = useRef<number | null>(null);
   const detectedOnceRef = useRef(false);
   const stableValueRef = useRef("");
   const stableCountRef = useRef(0);
+  const onDetectedRef = useRef(onDetected);
 
   const [statusText, setStatusText] = useState("Starting camera...");
   const [manualValue, setManualValue] = useState("");
 
   const scanBox = getScanBoxByMode(scanMode);
+
+  useEffect(() => {
+    onDetectedRef.current = onDetected;
+  }, [onDetected]);
+
+  const resetContinuousScanner = (message = "Ready for next barcode.") => {
+    if (resetTimerRef.current) {
+      window.clearTimeout(resetTimerRef.current);
+      resetTimerRef.current = null;
+    }
+
+    resetTimerRef.current = window.setTimeout(() => {
+      detectedOnceRef.current = false;
+      stableValueRef.current = "";
+      stableCountRef.current = 0;
+      setStatusText(message);
+    }, continuous ? 1150 : 0);
+  };
 
   useEffect(() => {
     if (!isOpen) return;
@@ -1228,7 +1266,7 @@ function CameraScanModal({
     detectedOnceRef.current = false;
     stableValueRef.current = "";
     stableCountRef.current = 0;
-    setStatusText("Starting camera...");
+    setStatusText(continuous ? "Auto scan ready. Scan first part." : "Starting camera...");
 
     const start = async () => {
       try {
@@ -1274,7 +1312,11 @@ function CameraScanModal({
           formats: ["code_39", "code_128", "qr_code", "ean_13", "ean_8", "upc_a", "upc_e"],
         });
 
-        setStatusText("Align barcode inside the red scan box.");
+        setStatusText(
+          continuous
+            ? "Auto scan ready. Keep barcode inside the red box."
+            : "Align barcode inside the red scan box."
+        );
 
         scanTimerRef.current = window.setInterval(async () => {
           try {
@@ -1310,7 +1352,7 @@ function CameraScanModal({
 
             if (rawValue && !detectedOnceRef.current) {
               const normalizedValue = normalizeScanValue(rawValue);
-              const requiredStableCount = scanMode === "labelQty" ? 2 : 3;
+              const requiredStableCount = continuous ? 2 : scanMode === "labelQty" ? 2 : 3;
 
               if (stableValueRef.current === normalizedValue) {
                 stableCountRef.current += 1;
@@ -1328,14 +1370,21 @@ function CameraScanModal({
 
               if (stableCountRef.current >= requiredStableCount) {
                 detectedOnceRef.current = true;
-                setStatusText("Barcode detected.");
-                onDetected(rawValue);
+                stableValueRef.current = "";
+                stableCountRef.current = 0;
+
+                setStatusText(continuous ? "Scan received. Move to next part." : "Barcode detected.");
+                onDetectedRef.current(rawValue);
+
+                if (continuous) {
+                  resetContinuousScanner("Ready for next part barcode.");
+                }
               }
             }
           } catch {
             // Ignore frame scan errors.
           }
-        }, 420);
+        }, continuous ? 360 : 420);
       } catch {
         setStatusText("Camera access failed. Use manual input below.");
       }
@@ -1351,6 +1400,11 @@ function CameraScanModal({
         scanTimerRef.current = null;
       }
 
+      if (resetTimerRef.current) {
+        window.clearTimeout(resetTimerRef.current);
+        resetTimerRef.current = null;
+      }
+
       if (streamRef.current) {
         streamRef.current.getTracks().forEach((track) => track.stop());
         streamRef.current = null;
@@ -1361,7 +1415,7 @@ function CameraScanModal({
       stableValueRef.current = "";
       stableCountRef.current = 0;
     };
-  }, [isOpen, onDetected, scanMode]);
+  }, [isOpen, scanMode, continuous]);
 
   if (!isOpen) return null;
 
@@ -1388,6 +1442,8 @@ function CameraScanModal({
                 ? "PART NO BARCODE"
                 : scanMode === "labelQty"
                 ? "PACKAGE QTY BARCODE"
+                : continuous
+                ? "AUTO PART SCAN"
                 : "PART BARCODE"}
             </div>
           </div>
@@ -1414,16 +1470,38 @@ function CameraScanModal({
             onClick={() => {
               const value = manualValue.trim();
 
-              if (!value || detectedOnceRef.current) return;
+              if (!value) return;
+
+              onDetectedRef.current(value);
+
+              if (continuous) {
+                setManualValue("");
+                setStatusText("Manual scan submitted. Ready for next barcode.");
+                resetContinuousScanner("Ready for next part barcode.");
+                return;
+              }
 
               detectedOnceRef.current = true;
-              onDetected(value);
             }}
           >
             USE VALUE
           </button>
+
+          {continuous && onDefectLast ? (
+            <button
+              style={modalDefectButtonStyle}
+              onClick={() => {
+                onDefectLast();
+                setStatusText("Defect recorded. Scan replacement part.");
+                resetContinuousScanner("Ready for replacement part barcode.");
+              }}
+            >
+              DEFECT LAST
+            </button>
+          ) : null}
+
           <button style={modalCancelButtonStyle} onClick={onClose}>
-            CLOSE
+            {continuous ? "BACK TO HMI" : "CLOSE"}
           </button>
         </div>
       </div>
@@ -1730,8 +1808,8 @@ function HmiScreen({
 
         <div style={scannerFabWrapStyle}>
           <button style={scannerFabButtonStyle} onClick={onOpenCamera}>
-            <span style={scannerFabPrimaryTextStyle}>SCAN</span>
-            <span style={scannerFabSecondaryTextStyle}>CAMERA</span>
+            <span style={scannerFabPrimaryTextStyle}>START</span>
+            <span style={scannerFabSecondaryTextStyle}>AUTO SCAN</span>
           </button>
         </div>
 
@@ -2525,6 +2603,17 @@ const modalSubmitButtonStyle = {
   color: "#ffffff",
   fontSize: 16,
   fontWeight: 800,
+  cursor: "pointer",
+};
+
+const modalDefectButtonStyle = {
+  minHeight: 54,
+  border: "none",
+  borderRadius: 16,
+  background: "linear-gradient(180deg, #fde047 0%, #eab308 100%)",
+  color: "#111827",
+  fontSize: 16,
+  fontWeight: 900,
   cursor: "pointer",
 };
 
