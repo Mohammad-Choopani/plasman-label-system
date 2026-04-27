@@ -859,44 +859,52 @@ export default function App() {
   };
 
   const handleOpenDisplayPart = () => {
-    setLabelDetailsDraft(null);
-    setScanStage("labelCamera");
-    setMachineMessage("Step 1: scan the top Part No barcode.");
-  };
+  setLabelDetailsDraft(null);
+  setScanStage("labelCamera");
+  setMachineMessage("Step 1: scan the top Part No barcode.");
+};
 
-  const handleLabelDetected = (value: string) => {
-    const foundPart = findCatalogPartByLabelScan(value);
-    const extracted = tryExtractPartNumber(value);
+const applyLabelPartScan = (value: string, nextStage: ScanStage) => {
+  const foundPart = findCatalogPartByLabelScan(value);
+  const extracted = tryExtractPartNumber(value);
 
-    if (!foundPart) {
-      setLabelDetailsDraft({
-        externalPartNumber: extracted,
-        internalNumber: "#N/A",
-        description: "#N/A",
-        packagingQty: "",
-        skdQty: "",
-      });
-
-      setScanStage("labelQtyCamera");
-      setMachineMessage("Part number scanned. Step 2: scan Package Qty.");
-      pushAlert("warning", "Catalog row not found. Scan Package Qty next.");
-      speakShort(`External label ${extracted}`);
-      return;
-    }
-
+  if (!foundPart) {
     setLabelDetailsDraft({
-      externalPartNumber: foundPart.externalPartNumber,
-      internalNumber: foundPart.internalNumber,
-      description: foundPart.description,
+      externalPartNumber: extracted,
+      internalNumber: "#N/A",
+      description: "#N/A",
       packagingQty: "",
       skdQty: "",
     });
 
-    setScanStage("labelQtyCamera");
-    setMachineMessage("Part number scanned. Step 2: scan the Package Qty barcode.");
-    pushAlert("success", "Label part number scanned successfully.");
-    speakShort(`External label ${foundPart.externalPartNumber}`);
-  };
+    setScanStage(nextStage);
+    setMachineMessage("Part number scanned. Next: scan Package Qty.");
+    pushAlert("warning", "Catalog row not found. Scan Package Qty next.");
+    speakShort(`External label ${extracted}`);
+    return;
+  }
+
+  setLabelDetailsDraft({
+    externalPartNumber: foundPart.externalPartNumber,
+    internalNumber: foundPart.internalNumber,
+    description: foundPart.description,
+    packagingQty: "",
+    skdQty: "",
+  });
+
+  setScanStage(nextStage);
+  setMachineMessage("Part number scanned. Next: scan Package Qty.");
+  pushAlert("success", "Label part number scanned successfully.");
+  speakShort(`External label ${foundPart.externalPartNumber}`);
+};
+
+const handleLabelDetected = (value: string) => {
+  applyLabelPartScan(value, "labelQtyCamera");
+};
+
+const handleHandLabelDetected = (value: string) => {
+  applyLabelPartScan(value, "idle");
+};
 
   const handleLabelQtyDetected = (value: string) => {
     const qty = extractQuantityFromScan(value);
@@ -1162,16 +1170,18 @@ export default function App() {
 
       {screen === "partMenu" && (
         <PartMenuScreen
-          hmiCellCode={hmiCellCode}
-          hmiVersion={hmiVersion}
-          machineMessage={displayMachineMessage}
-          catalogCount={catalogCount}
-          labelDetailsDraft={labelDetailsDraft}
-          onDisplayPart={handleOpenDisplayPart}
-          onScanPackageQty={() => setScanStage("labelQtyCamera")}
-          onConfirmLabel={handleConfirmLabel}
-          onLogout={handleLogout}
-        />
+  hmiCellCode={hmiCellCode}
+  hmiVersion={hmiVersion}
+  machineMessage={displayMachineMessage}
+  catalogCount={catalogCount}
+  labelDetailsDraft={labelDetailsDraft}
+  onDisplayPart={handleOpenDisplayPart}
+  onHandLabelSubmit={handleHandLabelDetected}
+  onScanPackageQty={() => setScanStage("labelQtyCamera")}
+  onHandQtySubmit={handleLabelQtyDetected}
+  onConfirmLabel={handleConfirmLabel}
+  onLogout={handleLogout}
+/>
       )}
 
       {screen === "hmi" && activeSession && (
@@ -1593,7 +1603,9 @@ function PartMenuScreen({
   catalogCount,
   labelDetailsDraft,
   onDisplayPart,
+  onHandLabelSubmit,
   onScanPackageQty,
+  onHandQtySubmit,
   onConfirmLabel,
   onLogout,
 }: {
@@ -1603,10 +1615,66 @@ function PartMenuScreen({
   catalogCount: number;
   labelDetailsDraft: LabelDetailsDraft | null;
   onDisplayPart: () => void;
+  onHandLabelSubmit: (value: string) => void;
   onScanPackageQty: () => void;
+  onHandQtySubmit: (value: string) => void;
   onConfirmLabel: () => void;
   onLogout: () => void;
 }) {
+  const [handLabelValue, setHandLabelValue] = useState("");
+  const [handQtyValue, setHandQtyValue] = useState("");
+  const handLabelInputRef = useRef<HTMLInputElement | null>(null);
+  const handQtyInputRef = useRef<HTMLInputElement | null>(null);
+
+  const submitHandLabel = () => {
+    const value = handLabelValue.trim();
+
+    if (!value) return;
+
+    onHandLabelSubmit(value);
+    setHandLabelValue("");
+
+    window.setTimeout(() => {
+      handQtyInputRef.current?.focus();
+    }, 120);
+  };
+  useEffect(() => {
+  const value = handLabelValue.trim();
+
+  if (value.length < 6) return;
+
+  const timer = window.setTimeout(() => {
+    submitHandLabel();
+  }, 220);
+
+  return () => window.clearTimeout(timer);
+}, [handLabelValue]);
+
+useEffect(() => {
+  const value = handQtyValue.trim();
+
+  if (!labelDetailsDraft || value.length < 1) return;
+
+  const timer = window.setTimeout(() => {
+    submitHandQty();
+  }, 220);
+
+  return () => window.clearTimeout(timer);
+}, [handQtyValue, labelDetailsDraft]);
+
+  const submitHandQty = () => {
+    const value = handQtyValue.trim();
+
+    if (!value || !labelDetailsDraft) return;
+
+    onHandQtySubmit(value);
+    setHandQtyValue("");
+
+    window.setTimeout(() => {
+      handQtyInputRef.current?.focus();
+    }, 120);
+  };
+
   return (
     <section style={mobileAppShellStyle}>
       <div style={mobileTopHeaderStyle}>
@@ -1659,9 +1727,78 @@ function PartMenuScreen({
         </div>
       </div>
 
+      <div style={hardwareScannerPanelStyle}>
+        <div style={hardwareScannerTitleStyle}>EXT LABEL HAND SCANNER</div>
+
+        <input
+          ref={handLabelInputRef}
+          value={handLabelValue}
+          onChange={(e) => setHandLabelValue(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              submitHandLabel();
+            }
+          }}
+          placeholder="Tap here, then scan external label barcode"
+          style={hardwareScannerInputStyle}
+          autoComplete="off"
+          autoCorrect="off"
+          spellCheck={false}
+        />
+
+        <button style={blueActionButtonStyle} onClick={submitHandLabel}>
+          USE EXT LABEL SCAN
+        </button>
+      </div>
+
+      <div
+        style={{
+          ...hardwareScannerPanelStyle,
+          opacity: labelDetailsDraft ? 1 : 0.55,
+        }}
+      >
+        <div style={hardwareScannerTitleStyle}>PACKAGE QTY HAND SCANNER</div>
+
+        <input
+          ref={handQtyInputRef}
+          value={handQtyValue}
+          onChange={(e) => setHandQtyValue(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              submitHandQty();
+            }
+          }}
+          placeholder={
+            labelDetailsDraft
+              ? "Tap here, then scan package quantity barcode"
+              : "Scan EXT label first"
+          }
+          style={hardwareScannerInputStyle}
+          inputMode="numeric"
+          disabled={!labelDetailsDraft}
+          autoComplete="off"
+          autoCorrect="off"
+          spellCheck={false}
+        />
+
+        <button
+          style={{
+            ...blueActionButtonStyle,
+            opacity: labelDetailsDraft ? 1 : 0.65,
+            cursor: labelDetailsDraft ? "pointer" : "not-allowed",
+          }}
+          onClick={submitHandQty}
+          disabled={!labelDetailsDraft}
+        >
+          USE PACKAGE QTY SCAN
+        </button>
+      </div>
+
       <div style={mobileButtonGridTwoStyle}>
         <button style={primaryButtonStyle} onClick={onDisplayPart}>
-          SCAN EXT LABEL
+          CAMERA EXT LABEL
         </button>
 
         <button
@@ -1673,7 +1810,7 @@ function PartMenuScreen({
           onClick={onScanPackageQty}
           disabled={!labelDetailsDraft}
         >
-          SCAN PACKAGE
+          CAMERA PACKAGE
         </button>
 
         <button style={secondaryButtonStyle} onClick={onConfirmLabel}>
