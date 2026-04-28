@@ -459,7 +459,7 @@ function extractQuantityFromScan(rawValue: string) {
   const cleaned = String(rawValue || "").toUpperCase().trim();
 
   const keywordMatch = cleaned.match(
-    /(?:QTY|QUANTITY|PACK|PKG|PACKAGE|COUNT)[^\d]*(\d{1,5})/
+    /(?:QTY|QUANTITY|PACK|PKG|PACKAGE|COUNT)[^\d]*(\d{1,20})/
   );
 
   if (keywordMatch?.[1]) {
@@ -468,20 +468,20 @@ function extractQuantityFromScan(rawValue: string) {
 
   const compact = cleaned.replace(/\s+/g, "");
 
-  if (/^\d{1,5}$/.test(compact)) {
+  if (/^\d{1,20}$/.test(compact)) {
     return compact;
   }
 
-  const allNumbers = compact.match(/\d{1,5}/g) || [];
+  const allNumbers = compact.match(/\d{1,20}/g) || [];
 
-  const reasonableQty = allNumbers
-    .map((value) => Number(value))
-    .filter((value) => value > 0 && value <= 999)
-    .sort((a, b) => a - b)[0];
+  if (!allNumbers.length) {
+    return "";
+  }
 
-  return reasonableQty ? String(reasonableQty) : "";
+  const longestNumber = allNumbers.sort((a, b) => b.length - a.length)[0];
+
+  return longestNumber || "";
 }
-
 function findCatalogPartByLabelScan(rawValue: string) {
   const extracted = tryExtractPartNumber(rawValue);
   const normalizedExtracted = normalizeCatalogKey(extracted);
@@ -1382,7 +1382,7 @@ function CameraScanModal({
 
             if (rawValue && !detectedOnceRef.current) {
               const normalizedValue = normalizeScanValue(rawValue);
-              const requiredStableCount = continuous ? 2 : scanMode === "labelQty" ? 2 : 3;
+              const requiredStableCount = continuous ? 2 : scanMode === "labelQty" ? 1 : 3;
 
               if (stableValueRef.current === normalizedValue) {
                 stableCountRef.current += 1;
