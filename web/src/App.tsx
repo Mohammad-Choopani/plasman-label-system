@@ -1636,31 +1636,8 @@ function PartMenuScreen({
 
     window.setTimeout(() => {
       handQtyInputRef.current?.focus();
-    }, 120);
+    }, 180);
   };
-  useEffect(() => {
-  const value = handLabelValue.trim();
-
-  if (value.length < 6) return;
-
-  const timer = window.setTimeout(() => {
-    submitHandLabel();
-  }, 220);
-
-  return () => window.clearTimeout(timer);
-}, [handLabelValue]);
-
-useEffect(() => {
-  const value = handQtyValue.trim();
-
-  if (!labelDetailsDraft || value.length < 1) return;
-
-  const timer = window.setTimeout(() => {
-    submitHandQty();
-  }, 220);
-
-  return () => window.clearTimeout(timer);
-}, [handQtyValue, labelDetailsDraft]);
 
   const submitHandQty = () => {
     const value = handQtyValue.trim();
@@ -1672,8 +1649,32 @@ useEffect(() => {
 
     window.setTimeout(() => {
       handQtyInputRef.current?.focus();
-    }, 120);
+    }, 180);
   };
+
+  useEffect(() => {
+    const value = handLabelValue.trim();
+
+    if (value.length < 6) return;
+
+    const timer = window.setTimeout(() => {
+      submitHandLabel();
+    }, 450);
+
+    return () => window.clearTimeout(timer);
+  }, [handLabelValue]);
+
+  useEffect(() => {
+    const value = handQtyValue.trim();
+
+    if (!labelDetailsDraft || value.length < 1) return;
+
+    const timer = window.setTimeout(() => {
+      submitHandQty();
+    }, 850);
+
+    return () => window.clearTimeout(timer);
+  }, [handQtyValue, labelDetailsDraft]);
 
   return (
     <section style={mobileAppShellStyle}>
